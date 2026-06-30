@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { sendMessage, getThread, DyAuthError } from "@/lib/dyClient";
+import { sendMessageWithRetry, getThread, DyAuthError } from "@/lib/dyClient";
 import { persistMessages } from "@/lib/persist";
 
 export const dynamic = "force-dynamic";
@@ -10,10 +10,11 @@ export const dynamic = "force-dynamic";
  * Persiste el mensaje humano, lo envía a DY, persiste la respuesta y la devuelve.
  */
 export async function POST(req: NextRequest) {
-  const { threadId, message, structured } = (await req.json()) as {
+  const { threadId, message, structured, mode } = (await req.json()) as {
     threadId: string;
     message: string;
     structured?: boolean;
+    mode?: string;
   };
 
   if (!threadId || !message?.trim()) {
@@ -35,9 +36,10 @@ export async function POST(req: NextRequest) {
   });
 
   try {
-    // Enviamos a DY con la plantilla estructurada si el usuario eligió "Detailed".
-    const dy = await sendMessage(threadId, message, {
+    // Enviamos a DY con el estilo elegido (simple / detailed / bulleted).
+    const dy = await sendMessageWithRetry(threadId, message, {
       structured: structured !== false,
+      mode,
     });
     await persistMessages(threadId, dy.messages);
     // ...y reconciliamos con el historial autoritativo (incluye el mensaje

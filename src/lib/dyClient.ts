@@ -7,7 +7,7 @@
 const BASE = process.env.DY_BASE_URL ?? "https://adm.dynamicyield.com";
 
 import { getDySession } from "./dySession";
-import { wrapWithTemplate, isTemplateEnabled } from "./promptTemplate";
+import { wrapWithTemplate, isTemplateEnabled, resolveMode } from "./promptTemplate";
 
 export interface DyMessage {
   id: string;
@@ -31,6 +31,16 @@ export class DyAuthError extends Error {
     super(message);
     this.status = status;
     this.name = "DyAuthError";
+  }
+}
+
+/** Error transitorio de DY (p. ej. 503 LLM_SERVICE_ERROR) — se puede reintentar. */
+export class DyTransientError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.name = "DyTransientError";
   }
 }
 
@@ -90,6 +100,11 @@ async function handle(res: Response): Promise<DyChatResponse> {
     );
   }
   if (!res.ok && res.status !== 304) {
+    // DY a veces devuelve 503 / LLM_SERVICE_ERROR de forma transitoria. Lo
+    // marcamos como reintetable para que sendMessage lo reintente.
+    if (res.status === 503 || /LLM_SERVICE_ERROR|temporarily unavailable|try again later/i.test(raw)) {
+      throw new DyTransientError(res.status, `DY temporarily unavailable: ${raw.slice(0, 200)}`);
+    }
     throw new Error(`DY responded ${res.status}: ${raw.slice(0, 300)}`);
   }
   return JSON.parse(raw) as DyChatResponse;
@@ -108,17 +123,20 @@ export async function createThread(): Promise<DyChatResponse> {
 
 /**
  * Envía un mensaje a un thread y devuelve la(s) respuesta(s) del agente.
- * Si `structured` es true (por defecto en el chat), envuelve la pregunta con la
- * plantilla de respuesta (Summary / Details / References).
+ * `mode` ("simple" | "detailed" | "bulleted") elige la plantilla de respuesta.
+ * Se acepta `structured` por compatibilidad (true → detailed, false → simple).
  */
 export async function sendMessage(
   threadId: string,
   message: string,
-  opts: { structured?: boolean } = {}
+  opts: { structured?: boolean; mode?: string } = {}
 ): Promise<DyChatResponse> {
   const sectionId = Number((await getDySession()).sectionId || "0");
+  const mode = resolveMode(opts);
   const text =
-    opts.structured && isTemplateEnabled() ? wrapWithTemplate(message) : message;
+    mode !== "simple" && isTemplateEnabled()
+      ? wrapWithTemplate(message, mode)
+      : message;
   const body = {
     message: text,
     scope: "test",
@@ -141,6 +159,30 @@ export async function sendMessage(
     redirect: "manual",
   });
   return handle(res);
+}
+
+/**
+ * Igual que sendMessage pero reintenta los errores transitorios de DY
+ * (503 / LLM_SERVICE_ERROR) con backoff. Pensado para el batch y el chat.
+ */
+export async function sendMessageWithRetry(
+  threadId: string,
+  message: string,
+  opts: { structured?: boolean; mode?: string; retries?: number } = {}
+): Promise<DyChatResponse> {
+  const retries = opts.retries ?? 3;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await sendMessage(threadId, message, opts);
+    } catch (err) {
+      lastErr = err;
+      if (!(err instanceof DyTransientError) || attempt === retries) throw err;
+      // Backoff: 1.5s, 3s, 4.5s…
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 /** Lee el historial completo de un thread desde DY. */

@@ -1,143 +1,30 @@
 "use client";
 
-import { useRef, useState } from "react";
 import Link from "next/link";
-import * as XLSX from "xlsx";
-
-interface Row {
-  question: string;
-  answer: string;
-  expert: string;
-  sources: string;
-  status: "pending" | "running" | "done" | "error";
-  [key: string]: string;
-}
-
-const QUESTION_KEYS = ["question", "pregunta", "questions", "q"];
+import { useBatch } from "@/components/BatchProvider";
 
 export default function BatchPage() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [context, setContext] = useState("");
-  const [detailed, setDetailed] = useState(false);
-  const [fileName, setFileName] = useState("");
-  const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const stopRef = useRef(false);
+  const {
+    rows,
+    context,
+    mode,
+    fileName,
+    running,
+    progress,
+    error,
+    doneCount,
+    setContext,
+    setMode,
+    loadFile,
+    run,
+    stop,
+    download,
+  } = useBatch();
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    setError(null);
     const file = e.target.files?.[0];
-    if (!file) return;
-    setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const wb = XLSX.read(ev.target?.result, { type: "array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
-          defval: "",
-        });
-        if (json.length === 0) {
-          setError("The sheet is empty.");
-          return;
-        }
-        // Detecta la columna de preguntas (por nombre o la primera columna).
-        const cols = Object.keys(json[0]);
-        const qCol =
-          cols.find((c) => QUESTION_KEYS.includes(c.trim().toLowerCase())) ??
-          cols[0];
-        const parsed: Row[] = json
-          .map((r) => ({
-            ...r,
-            question: String(r[qCol] ?? "").trim(),
-            answer: String(r["answer"] ?? r["respuesta"] ?? ""),
-            expert: "",
-            sources: "",
-            status: "pending" as const,
-          }))
-          .filter((r) => r.question.length > 0);
-        setRows(parsed);
-        setProgress(0);
-      } catch (err) {
-        setError("Could not read the file: " + (err as Error).message);
-      }
-    };
-    reader.readAsArrayBuffer(file);
+    if (file) loadFile(file);
   }
-
-  async function run() {
-    if (rows.length === 0 || running) return;
-    setRunning(true);
-    setError(null);
-    stopRef.current = false;
-
-    for (let i = 0; i < rows.length; i++) {
-      if (stopRef.current) break;
-      setRows((prev) => {
-        const next = [...prev];
-        next[i] = { ...next[i], status: "running" };
-        return next;
-      });
-
-      try {
-        const res = await fetch("/api/ask", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ question: rows[i].question, context, structured: detailed }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Error");
-        setRows((prev) => {
-          const next = [...prev];
-          next[i] = {
-            ...next[i],
-            answer: data.answer,
-            expert: data.expert,
-            sources: data.tools,
-            status: "done",
-          };
-          return next;
-        });
-      } catch (err) {
-        setRows((prev) => {
-          const next = [...prev];
-          next[i] = {
-            ...next[i],
-            answer: "ERROR: " + (err as Error).message,
-            status: "error",
-          };
-          return next;
-        });
-        // Si es auth, paramos todo el lote.
-        if (/sesi[oó]n|session|cookie|xsrf|caduc/i.test((err as Error).message)) {
-          setError((err as Error).message);
-          break;
-        }
-      }
-      setProgress(i + 1);
-      // Pequeña pausa para no saturar el backend / rate limits.
-      await new Promise((r) => setTimeout(r, 600));
-    }
-    setRunning(false);
-  }
-
-  function download() {
-    const out = rows.map((r) => ({
-      question: r.question,
-      answer: r.answer,
-      expert: r.expert,
-      sources: r.sources,
-      status: r.status,
-    }));
-    const ws = XLSX.utils.json_to_sheet(out);
-    ws["!cols"] = [{ wch: 40 }, { wch: 80 }, { wch: 16 }, { wch: 20 }, { wch: 10 }];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "answers");
-    XLSX.writeFile(wb, fileName.replace(/\.xlsx?$/i, "") + "_answered.xlsx");
-  }
-
-  const doneCount = rows.filter((r) => r.status === "done").length;
 
   return (
     <div className="mx-auto max-w-5xl p-6">
@@ -146,6 +33,12 @@ export default function BatchPage() {
         <Link href="/" className="text-sm text-brand hover:underline">
           ← Back to chat
         </Link>
+      </div>
+
+      <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-700">
+        The batch keeps running in the background if you switch to another
+        conversation. A floating badge (bottom-right) shows progress and brings
+        you back here.
       </div>
 
       {error && (
@@ -173,26 +66,37 @@ export default function BatchPage() {
           <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
             <button
               type="button"
-              onClick={() => setDetailed(true)}
+              onClick={() => setMode("detailed")}
               className={`px-2.5 py-1 ${
-                detailed ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                mode === "detailed" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
               }`}
             >
               Detailed
             </button>
             <button
               type="button"
-              onClick={() => setDetailed(false)}
-              className={`px-2.5 py-1 ${
-                !detailed ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              onClick={() => setMode("bulleted")}
+              className={`border-l border-gray-300 px-2.5 py-1 ${
+                mode === "bulleted" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              Detailed (bullets)
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("simple")}
+              className={`border-l border-gray-300 px-2.5 py-1 ${
+                mode === "simple" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
               }`}
             >
               Simple
             </button>
           </div>
           <span className="text-[11px] text-gray-400">
-            {detailed
-              ? "Structured: Summary · Details · References"
+            {mode === "detailed"
+              ? "Structured: Summary · Details · Example · References"
+              : mode === "bulleted"
+              ? "Structured: Summary · bullet Details · Example · References"
               : "Short, direct answer (best for spreadsheet cells)"}
           </span>
         </div>
@@ -219,7 +123,7 @@ export default function BatchPage() {
           </button>
           {running && (
             <button
-              onClick={() => (stopRef.current = true)}
+              onClick={stop}
               className="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50"
             >
               Stop

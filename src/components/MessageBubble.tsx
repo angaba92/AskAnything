@@ -18,7 +18,22 @@ export default function MessageBubble({ m }: { m: ChatMessage }) {
           <p className="whitespace-pre-wrap">{m.text}</p>
         ) : (
           <div className="markdown">
-            <ReactMarkdown>{m.text}</ReactMarkdown>
+            <ReactMarkdown
+              components={{
+                a: ({ href, children }) => (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-brand underline underline-offset-2 hover:text-brand-dark"
+                  >
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {m.text}
+            </ReactMarkdown>
           </div>
         )}
         {!isHuman && m.meta?.agentMetadata?.expertSelected && (

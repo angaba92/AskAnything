@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createThread, sendMessage, DyAuthError } from "@/lib/dyClient";
+import { createThread, sendMessageWithRetry, DyAuthError } from "@/lib/dyClient";
 
 export const dynamic = "force-dynamic";
 
@@ -13,25 +13,28 @@ export const dynamic = "force-dynamic";
  * plantilla de dyClient). structured=false/omitido → respuesta simple y concisa.
  */
 export async function POST(req: NextRequest) {
-  const { question, context, structured } = (await req.json()) as {
+  const { question, context, structured, mode } = (await req.json()) as {
     question: string;
     context?: string;
     structured?: boolean;
+    mode?: string;
   };
 
   if (!question?.trim()) {
     return NextResponse.json({ error: "question is required" }, { status: 400 });
   }
 
-  const concise = structured ? "" : " concisely";
+  const isSimple = mode ? mode === "simple" : !structured;
+  const concise = isSimple ? " concisely" : "";
   const preamble = context?.trim()
     ? `${context.trim()}\n\nAnswer the following question independently${concise}. Do not reference previous questions.\n\nQuestion: `
     : `Answer the following question independently${concise}.\n\nQuestion: `;
 
   try {
     const thread = await createThread();
-    const dy = await sendMessage(thread.threadId, preamble + question.trim(), {
+    const dy = await sendMessageWithRetry(thread.threadId, preamble + question.trim(), {
       structured: Boolean(structured),
+      mode,
     });
     const m = dy.messages[0];
     return NextResponse.json({

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import BatchProvider from "@/components/BatchProvider";
 
 export const metadata: Metadata = {
   title: "AskAnything — DY Agents Client",
@@ -13,7 +14,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <BatchProvider>{children}</BatchProvider>
+      </body>
     </html>
   );
 }

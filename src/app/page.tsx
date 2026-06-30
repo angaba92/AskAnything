@@ -20,7 +20,7 @@ export default function Home() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copilotQuestion, setCopilotQuestion] = useState<string | null>(null);
-  const [detailed, setDetailed] = useState(true);
+  const [mode, setMode] = useState<"simple" | "detailed" | "bulleted">("detailed");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const loadThreads = useCallback(async () => {
@@ -94,7 +94,7 @@ export default function Home() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ threadId: activeId, message: text, structured: detailed }),
+      body: JSON.stringify({ threadId: activeId, message: text, mode }),
     });
 
     if (res.ok) {
@@ -196,26 +196,37 @@ export default function Home() {
                 <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
                   <button
                     type="button"
-                    onClick={() => setDetailed(true)}
+                    onClick={() => setMode("detailed")}
                     className={`px-2.5 py-1 ${
-                      detailed ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                      mode === "detailed" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
                     }`}
                   >
                     Detailed
                   </button>
                   <button
                     type="button"
-                    onClick={() => setDetailed(false)}
-                    className={`px-2.5 py-1 ${
-                      !detailed ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                    onClick={() => setMode("bulleted")}
+                    className={`border-l border-gray-300 px-2.5 py-1 ${
+                      mode === "bulleted" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                    }`}
+                  >
+                    Detailed (bullets)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMode("simple")}
+                    className={`border-l border-gray-300 px-2.5 py-1 ${
+                      mode === "simple" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
                     }`}
                   >
                     Simple
                   </button>
                 </div>
                 <span className="text-[11px] text-gray-400">
-                  {detailed
-                    ? "Summary · Details · References"
+                  {mode === "detailed"
+                    ? "Summary · Details · Example · References"
+                    : mode === "bulleted"
+                    ? "Summary · bullet Details · Example · References"
                     : "Short, direct answer"}
                 </span>
               </div>
