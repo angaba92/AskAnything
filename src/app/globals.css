@@ -33,3 +33,142 @@ body {
 .markdown pre code {
   @apply bg-transparent p-0 whitespace-pre;
 }
+
+/* ------------------------------------------------------------------ */
+/* Dark mode.                                                          */
+/* The app uses hard-coded Tailwind color utilities across components, */
+/* so we retrofit dark mode by overriding those utilities under `.dark`*/
+/* (`.dark .bg-white` wins on specificity over `.bg-white`). No need   */
+/* to touch every component.                                           */
+/* ------------------------------------------------------------------ */
+.dark body {
+  background-color: #0f172a; /* slate-900 */
+  color: #e2e8f0; /* slate-200 */
+}
+
+/* Surfaces */
+.dark .bg-white {
+  background-color: #1e293b; /* slate-800 */
+}
+.dark .bg-gray-50 {
+  background-color: #1b2638;
+}
+.dark .bg-gray-100 {
+  background-color: #334155; /* slate-700 */
+}
+.dark .bg-gray-200 {
+  background-color: #475569; /* slate-600 */
+}
+
+/* Borders */
+.dark .border-gray-100 {
+  border-color: #273449;
+}
+.dark .border-gray-200 {
+  border-color: #334155;
+}
+.dark .border-gray-300 {
+  border-color: #475569;
+}
+
+/* Text */
+.dark .text-gray-900,
+.dark .text-gray-800,
+.dark .text-gray-700 {
+  color: #e2e8f0; /* slate-200 */
+}
+.dark .text-gray-600 {
+  color: #cbd5e1; /* slate-300 */
+}
+.dark .text-gray-500,
+.dark .text-gray-400 {
+  color: #94a3b8; /* slate-400 */
+}
+
+/* Brand text needs to lift off the dark background a bit */
+.dark .text-brand-dark {
+  color: #c4b5fd; /* violet-300 */
+}
+.dark .text-brand {
+  color: #a78bfa; /* violet-400 */
+}
+
+/* Hover states that assume a light surface */
+.dark .hover\:bg-gray-50:hover {
+  background-color: #273449;
+}
+.dark .hover\:bg-gray-100:hover {
+  background-color: #334155;
+}
+.dark .hover\:bg-gray-200:hover {
+  background-color: #475569;
+}
+
+/* Status / alert tints */
+.dark .bg-red-50,
+.dark .bg-red-100 {
+  background-color: rgba(127, 29, 29, 0.3);
+}
+.dark .border-red-200 {
+  border-color: rgba(220, 38, 38, 0.4);
+}
+.dark .text-red-700,
+.dark .text-red-600 {
+  color: #fca5a5; /* red-300 */
+}
+.dark .text-red-400 {
+  color: #f87171;
+}
+
+.dark .bg-amber-50,
+.dark .bg-amber-100 {
+  background-color: rgba(120, 53, 15, 0.35);
+}
+.dark .border-amber-200 {
+  border-color: rgba(217, 119, 6, 0.4);
+}
+.dark .text-amber-800,
+.dark .text-amber-700,
+.dark .text-amber-600 {
+  color: #fcd34d; /* amber-300 */
+}
+
+.dark .bg-blue-50,
+.dark .bg-blue-100 {
+  background-color: rgba(30, 58, 138, 0.35);
+}
+.dark .border-blue-200 {
+  border-color: rgba(37, 99, 235, 0.4);
+}
+.dark .text-blue-700 {
+  color: #93c5fd; /* blue-300 */
+}
+
+.dark .bg-green-50,
+.dark .bg-green-100 {
+  background-color: rgba(6, 78, 59, 0.35);
+}
+.dark .text-green-700,
+.dark .text-green-600 {
+  color: #6ee7b7; /* emerald-300 */
+}
+
+/* Markdown code blocks on dark */
+.dark .markdown code {
+  background-color: #0b1220;
+  color: #e2e8f0;
+}
+.dark .markdown pre {
+  background-color: #0b1220;
+}
+
+/* Form controls */
+.dark input,
+.dark textarea,
+.dark select {
+  color-scheme: dark;
+}
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #64748b;
+}
