@@ -1,0 +1,27 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Login inicial estilo .htaccess (HTTP Basic Auth) para Apache.
+#
+# Úsalo SOLO si sirves la app detrás de Apache (p.ej. Apache como reverse proxy
+# delante de `npm run start`). Si despliegas la app de Next.js "a pelo", el
+# login equivalente ya está integrado en src/middleware.ts (variables
+# DEMO_AUTH_USERS / DEMO_AUTH_USER) y NO necesitas este fichero.
+#
+# Pasos:
+#   1) Genera el fichero de contraseñas (fuera del docroot, p.ej. /etc/apache2):
+#        htpasswd -c /etc/apache2/.htpasswd ana
+#        htpasswd     /etc/apache2/.htpasswd luis      # añadir más usuarios
+#   2) Ajusta AuthUserFile a esa ruta.
+#   3) Coloca este .htaccess en el directorio servido y asegúrate de que Apache
+#      tiene "AllowOverride AuthConfig" (o All) para ese directorio.
+# ─────────────────────────────────────────────────────────────────────────────
+
+AuthType Basic
+AuthName "AskAnything — internal access"
+AuthUserFile /etc/apache2/.htpasswd
+Require valid-user
+
+# Si Apache hace de reverse proxy hacia Next.js (puerto 3000), normalmente esto
+# va en la <VirtualHost> en vez de .htaccess:
+#   ProxyPreserveHost On
+#   ProxyPass        / http://127.0.0.1:3000/
+#   ProxyPassReverse / http://127.0.0.1:3000/

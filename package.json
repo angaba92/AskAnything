@@ -1,0 +1,38 @@
+{
+  "name": "askanything",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "vercel-build": "prisma generate && prisma db push && next build",
+    "start": "next start",
+    "demo": "npm run build && next start -H 0.0.0.0 -p 3000",
+    "lint": "next lint",
+    "db:push": "prisma db push",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^2.16.3",
+    "@prisma/client": "^5.22.0",
+    "@xenova/transformers": "^2.17.2",
+    "mammoth": "^1.12.0",
+    "next": "14.2.35",
+    "pdf-parse": "^1.1.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "sharp": "^0.35.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "prisma": "^5.22.0",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3"
+  }
+}

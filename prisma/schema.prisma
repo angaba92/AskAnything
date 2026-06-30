@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model Thread {
+  id        String   @id // threadId que devuelve DY
+  title     String   @default("New conversation")
+  status    String   @default("New") // New | InProgress | Waiting | Done
+  tags      String   @default("[]") // JSON array de strings
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  messages  Message[]
+}
+
+model Message {
+  id        String   @id
+  threadId  String
+  role      String // human | ai
+  text      String
+  seqId     Int      @default(0)
+  meta      String   @default("{}") // JSON: agentMetadata, artifactMetadata, interactionId
+  createdAt DateTime @default(now())
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+}
+
+model KbDoc {
+  id        String   @id @default(cuid())
+  name      String
+  kind      String // qa | pdf | docx | xlsx
+  chunks    Int      @default(0)
+  createdAt DateTime @default(now())
+  items     KbChunk[]
+}
+
+model KbChunk {
+  id        String   @id @default(cuid())
+  docId     String
+  source    String // nombre del archivo de origen
+  kind      String // qa | doc
+  question  String? // solo para pares Q&A
+  text      String // respuesta (qa) o pasaje (doc)
+  embedding String? // JSON array de floats (solo si se usa motor de embeddings)
+  createdAt DateTime @default(now())
+  doc       KbDoc    @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@index([docId])
+}

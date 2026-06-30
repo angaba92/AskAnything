@@ -1,0 +1,26 @@
+node_modules
+.next
+out
+build
+*.log
+.DS_Store
+
+# Secrets — NUNCA commitear
+.env
+.env.local
+
+# SQLite local
+prisma/dev.db
+prisma/dev.db-journal
+
+# Token cache de M365 Copilot (MSAL) — contiene tokens, NUNCA commitear
+.copilot-token-cache.json
+
+# Sesión DY compartida en runtime (cookie SSO) — NUNCA commitear
+.dy-session.json
+
+# Login estilo .htaccess para Apache
+.htpasswd
+
+# Vercel
+.vercel

@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "AskAnything · DY session capture",
+  "version": "1.0.0",
+  "description": "Captures your Dynamic Yield session cookie (incl. HttpOnly) and pushes it to the AskAnything app, so the team's shared session stays fresh without copying cURL.",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": [
+    "https://adm.dynamicyield.com/*",
+    "https://*.dynamicyield.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_title": "Capture DY session",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
