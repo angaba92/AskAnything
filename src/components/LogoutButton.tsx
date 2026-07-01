@@ -2,9 +2,7 @@
 
 export default function LogoutButton() {
   function handleLogout() {
-    // For HTTP Basic Auth, forcing a 401 challenge is the practical way to
-    // "log out" and require credentials again.
-    window.location.href = `/api/logout?ts=${Date.now()}`;
+    window.location.href = `/logout`;
   }
 
   return (
