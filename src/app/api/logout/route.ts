@@ -1,20 +1,28 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-function challenge() {
-  return new NextResponse("Logged out.", {
-    status: 401,
-    headers: {
-      "WWW-Authenticate": 'Basic realm="AskAnything internal demo", charset="UTF-8"',
-      "Cache-Control": "no-store",
-      Pragma: "no-cache",
-    },
+const FORCE_REAUTH_COOKIE = "aa_force_reauth";
+
+function logoutRedirect(req: NextRequest) {
+  const nonce = `${Date.now()}`;
+  const res = NextResponse.redirect(new URL("/", req.url));
+
+  res.cookies.set(FORCE_REAUTH_COOKIE, nonce, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: req.nextUrl.protocol === "https:",
+    path: "/",
+    maxAge: 120,
   });
+
+  res.headers.set("Cache-Control", "no-store");
+  res.headers.set("Pragma", "no-cache");
+  return res;
 }
 
-export async function GET() {
-  return challenge();
+export async function GET(req: NextRequest) {
+  return logoutRedirect(req);
 }
 
-export async function POST() {
-  return challenge();
+export async function POST(req: NextRequest) {
+  return logoutRedirect(req);
 }

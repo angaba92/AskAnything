@@ -2,7 +2,7 @@
 
 export default function LogoutButton() {
   function handleLogout() {
-    window.location.href = `/logout`;
+    window.location.href = `/api/logout?ts=${Date.now()}`;
   }
 
   return (

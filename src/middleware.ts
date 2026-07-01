@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+const AUTH_REALM_BASE = "AskAnything internal demo";
+const FORCE_REAUTH_COOKIE = "aa_force_reauth";
+
 function normalizeToken(value: string): string {
   const trimmed = value.trim();
   if (
@@ -19,19 +22,6 @@ function normalizeUsersList(raw: string): string {
   return normalized.replace(/\u00a0/g, " ").trim();
 }
 
-/**
- * Login inicial estilo .htaccess (HTTP Basic Auth) para el acceso del equipo.
- *
- * Off by default: si NO hay credenciales configuradas, todo pasa (dev local).
- *
- * Dos formas de configurar las credenciales (cualquiera activa el login):
- *   - DEMO_AUTH_USERS = "ana:clave1,luis:clave2"   (varios usuarios, estilo
- *     .htpasswd — recomendado para un equipo).
- *   - DEMO_AUTH_USER / DEMO_AUTH_PASSWORD          (un único usuario compartido).
- *
- * Protege páginas Y rutas API. Las credenciales viven SOLO en el servidor
- * (.env.local); nunca se exponen al navegador.
- */
 function loadCredentials(): Map<string, string> {
   const creds = new Map<string, string>();
   const list = process.env.DEMO_AUTH_USERS;
@@ -46,6 +36,7 @@ function loadCredentials(): Map<string, string> {
       }
     }
   }
+
   const u = process.env.DEMO_AUTH_USER
     ? normalizeToken(process.env.DEMO_AUTH_USER)
     : undefined;
@@ -53,14 +44,46 @@ function loadCredentials(): Map<string, string> {
     ? normalizeToken(process.env.DEMO_AUTH_PASSWORD)
     : undefined;
   if (u && p) creds.set(u, p);
+
   return creds;
+}
+
+function unauthorizedResponse(req: NextRequest, realm: string, clearReauth: boolean) {
+  const res = new NextResponse("Authentication required.", {
+    status: 401,
+    headers: {
+      "WWW-Authenticate": `Basic realm="${realm}", charset="UTF-8"`,
+      "Cache-Control": "no-store",
+      Pragma: "no-cache",
+    },
+  });
+
+  if (clearReauth) {
+    res.cookies.set(FORCE_REAUTH_COOKIE, "", {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: req.nextUrl.protocol === "https:",
+      path: "/",
+      maxAge: 0,
+    });
+  }
+
+  return res;
 }
 
 export function middleware(req: NextRequest) {
   const creds = loadCredentials();
 
-  // Gate disabled when no credentials configured.
   if (creds.size === 0) return NextResponse.next();
+
+  const forceReauth = req.cookies.get(FORCE_REAUTH_COOKIE)?.value;
+  if (forceReauth) {
+    return unauthorizedResponse(
+      req,
+      `${AUTH_REALM_BASE} (${forceReauth})`,
+      true,
+    );
+  }
 
   const header = req.headers.get("authorization");
   if (header?.startsWith("Basic ")) {
@@ -75,13 +98,9 @@ export function middleware(req: NextRequest) {
     }
   }
 
-  return new NextResponse("Authentication required.", {
-    status: 401,
-    headers: { "WWW-Authenticate": 'Basic realm="AskAnything internal demo"' },
-  });
+  return unauthorizedResponse(req, AUTH_REALM_BASE, false);
 }
 
 export const config = {
-  // Protect everything except Next.js internals and static assets.
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
