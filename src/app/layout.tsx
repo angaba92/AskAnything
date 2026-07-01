@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import BatchProvider from "@/components/BatchProvider";
 import ThemeToggle from "@/components/ThemeToggle";
+import LogoutButton from "@/components/LogoutButton";
 
 export const metadata: Metadata = {
   title: "AskAnything — DY Agents Client",
@@ -24,6 +25,7 @@ export default function RootLayout({
       </head>
       <body>
         <BatchProvider>{children}</BatchProvider>
+        <LogoutButton />
         <ThemeToggle />
       </body>
     </html>
