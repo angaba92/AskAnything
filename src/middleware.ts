@@ -11,6 +11,14 @@ function normalizeToken(value: string): string {
   return trimmed;
 }
 
+function normalizeUsersList(raw: string): string {
+  const normalized = normalizeToken(raw).replace(
+    /^DEMO_AUTH_USERS\s*=\s*/i,
+    "",
+  );
+  return normalized.replace(/\u00a0/g, " ").trim();
+}
+
 /**
  * Login inicial estilo .htaccess (HTTP Basic Auth) para el acceso del equipo.
  *
@@ -28,8 +36,8 @@ function loadCredentials(): Map<string, string> {
   const creds = new Map<string, string>();
   const list = process.env.DEMO_AUTH_USERS;
   if (list) {
-    const normalizedList = normalizeToken(list);
-    for (const pair of normalizedList.split(",")) {
+    const normalizedList = normalizeUsersList(list);
+    for (const pair of normalizedList.split(/[,\n;]+/)) {
       const idx = pair.indexOf(":");
       if (idx > 0) {
         const u = normalizeToken(pair.slice(0, idx));
