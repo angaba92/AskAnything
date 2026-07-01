@@ -1,5 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 
+function normalizeToken(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
 /**
  * Login inicial estilo .htaccess (HTTP Basic Auth) para el acceso del equipo.
  *
@@ -17,17 +28,22 @@ function loadCredentials(): Map<string, string> {
   const creds = new Map<string, string>();
   const list = process.env.DEMO_AUTH_USERS;
   if (list) {
-    for (const pair of list.split(",")) {
+    const normalizedList = normalizeToken(list);
+    for (const pair of normalizedList.split(",")) {
       const idx = pair.indexOf(":");
       if (idx > 0) {
-        const u = pair.slice(0, idx).trim();
-        const p = pair.slice(idx + 1).trim();
+        const u = normalizeToken(pair.slice(0, idx));
+        const p = normalizeToken(pair.slice(idx + 1));
         if (u && p) creds.set(u, p);
       }
     }
   }
-  const u = process.env.DEMO_AUTH_USER;
-  const p = process.env.DEMO_AUTH_PASSWORD;
+  const u = process.env.DEMO_AUTH_USER
+    ? normalizeToken(process.env.DEMO_AUTH_USER)
+    : undefined;
+  const p = process.env.DEMO_AUTH_PASSWORD
+    ? normalizeToken(process.env.DEMO_AUTH_PASSWORD)
+    : undefined;
   if (u && p) creds.set(u, p);
   return creds;
 }
@@ -43,8 +59,8 @@ export function middleware(req: NextRequest) {
     try {
       const decoded = atob(header.slice(6));
       const idx = decoded.indexOf(":");
-      const u = decoded.slice(0, idx);
-      const p = decoded.slice(idx + 1);
+      const u = normalizeToken(decoded.slice(0, idx));
+      const p = normalizeToken(decoded.slice(idx + 1));
       if (creds.get(u) === p) return NextResponse.next();
     } catch {
       // fall through to 401
