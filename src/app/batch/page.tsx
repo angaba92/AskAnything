@@ -29,10 +29,22 @@ export default function BatchPage() {
   } = useBatch();
 
   const [url, setUrl] = useState("");
+  const [dragOver, setDragOver] = useState(false);
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) loadFile(file);
+  }
+
+  function isExcel(file: File) {
+    return /\.(xlsx|xls)$/i.test(file.name);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && isExcel(file)) loadFile(file);
   }
 
   return (
@@ -110,26 +122,46 @@ export default function BatchPage() {
           </span>
         </div>
 
-        {/* Source: upload OR OneDrive/SharePoint link */}
+        {/* Source: drag & drop / upload OR OneDrive link */}
         <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={handleFile}
-              className="text-sm"
-            />
-            <span className="text-sm text-gray-500">
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            className={`flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-6 text-center transition-colors ${
+              dragOver
+                ? "border-brand bg-brand/5"
+                : "border-gray-300 bg-white"
+            }`}
+          >
+            <p className="text-sm text-gray-600">
+              <b>Drag &amp; drop</b> your Excel here
+              <span className="text-gray-400"> — e.g. straight from your synced OneDrive folder</span>
+            </p>
+            <p className="text-xs text-gray-400">or</p>
+            <label className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
+              Choose file
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleFile}
+                className="hidden"
+              />
+            </label>
+            <span className="text-xs text-gray-500">
               {rows.length > 0
                 ? `${rows.length} questions loaded`
-                : "Upload a file…"}
+                : "Accepted: .xlsx, .xls"}
             </span>
           </div>
 
           <div className="flex items-center gap-2">
             <div className="h-px flex-1 bg-gray-200" />
             <span className="text-[11px] uppercase tracking-wide text-gray-400">
-              or paste a OneDrive / SharePoint link
+              or paste a public OneDrive / SharePoint link
             </span>
             <div className="h-px flex-1 bg-gray-200" />
           </div>
@@ -152,9 +184,10 @@ export default function BatchPage() {
             </button>
           </div>
           <p className="text-[11px] text-gray-400">
-            The link must be shared as <b>“anyone with the link”</b>. Corporate
-            links that require sign-in cannot be downloaded automatically —
-            upload the file instead.
+            Only works for links shared as <b>“anyone with the link”</b>. Links
+            restricted to <b>Mastercard sign-in cannot be imported
+            automatically</b> (they require a Microsoft login the server doesn’t
+            have) — download the file and drag it in instead.
           </p>
         </div>
 
