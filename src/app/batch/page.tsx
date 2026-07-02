@@ -313,6 +313,8 @@ export default function BatchPage() {
                           ? "bg-amber-100 text-amber-700"
                           : r.status === "error"
                           ? "bg-red-100 text-red-700"
+                          : r.status === "skipped"
+                          ? "bg-blue-100 text-blue-700"
                           : "bg-gray-100 text-gray-500"
                       }`}
                     >

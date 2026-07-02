@@ -16,7 +16,7 @@ export interface BatchRow {
   answer: string;
   expert: string;
   sources: string;
-  status: "pending" | "running" | "done" | "error";
+  status: "pending" | "running" | "done" | "error" | "skipped";
   [key: string]: string;
 }
 
@@ -100,14 +100,19 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     aCol: string,
   ): BatchRow[] {
     return raw
-      .map((r) => ({
-        ...r,
-        question: String(r[qCol] ?? "").trim(),
-        answer: aCol ? String(r[aCol] ?? "") : "",
-        expert: "",
-        sources: "",
-        status: "pending" as const,
-      }))
+      .map((r) => {
+        const answer = aCol ? String(r[aCol] ?? "") : "";
+        return {
+          ...r,
+          question: String(r[qCol] ?? "").trim(),
+          answer,
+          expert: "",
+          sources: "",
+          status: (answer.trim().length > 0 ? "skipped" : "pending") as
+            | "pending"
+            | "skipped",
+        };
+      })
       .filter((r) => r.question.length > 0);
   }
 
@@ -130,7 +135,11 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     setQuestionColState(qCol);
     setAnswerColState(aCol);
     setFileName(name);
-    setRows(buildRows(json, qCol, aCol));
+    const built = buildRows(json, qCol, aCol);
+    setRows(built);
+    const firstPending = built.findIndex((r) => r.status === "pending");
+    const startIdx = firstPending === -1 ? 0 : firstPending;
+    setStartRowState(Math.max(1, startIdx + 1));
     setProgress(0);
     setError(null);
   }
@@ -188,13 +197,19 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
   function setQuestionCol(c: string) {
     setQuestionColState(c);
-    setRows(buildRows(rawRef.current, c, answerColRef.current));
+    const built = buildRows(rawRef.current, c, answerColRef.current);
+    setRows(built);
+    const firstPending = built.findIndex((r) => r.status === "pending");
+    setStartRowState(Math.max(1, (firstPending === -1 ? 0 : firstPending) + 1));
     setProgress(0);
   }
 
   function setAnswerCol(c: string) {
     setAnswerColState(c);
-    setRows(buildRows(rawRef.current, questionCol, c));
+    const built = buildRows(rawRef.current, questionCol, c);
+    setRows(built);
+    const firstPending = built.findIndex((r) => r.status === "pending");
+    setStartRowState(Math.max(1, (firstPending === -1 ? 0 : firstPending) + 1));
     setProgress(0);
   }
 
@@ -209,6 +224,19 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     setProgress(start);
     for (let i = start; i < total; i++) {
       if (stopRef.current) break;
+
+      const aCol = answerColRef.current;
+      const existing = String(rowsRef.current[i].answer ?? "").trim();
+      if (aCol && existing.length > 0) {
+        setRows((prev) => {
+          const next = [...prev];
+          next[i] = { ...next[i], status: "skipped" };
+          return next;
+        });
+        setProgress(i + 1);
+        continue;
+      }
+
       setRows((prev) => {
         const next = [...prev];
         next[i] = { ...next[i], status: "running" };
@@ -229,14 +257,14 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         if (!res.ok) throw new Error(data.error ?? "Error");
         setRows((prev) => {
           const next = [...prev];
-          const aCol = answerColRef.current;
+          const writeCol = answerColRef.current;
           next[i] = {
             ...next[i],
             answer: data.answer,
             expert: data.expert,
             sources: data.tools,
             status: "done",
-            ...(aCol ? { [aCol]: data.answer } : {}),
+            ...(writeCol ? { [writeCol]: data.answer } : {}),
           };
           return next;
         });
@@ -286,7 +314,9 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     XLSX.writeFile(wb, fileName.replace(/\.xlsx?$/i, "") + "_answered.xlsx");
   }
 
-  const doneCount = rows.filter((r) => r.status === "done").length;
+  const doneCount = rows.filter(
+    (r) => r.status === "done" || r.status === "skipped",
+  ).length;
 
   const value: BatchContextValue = {
     rows,
