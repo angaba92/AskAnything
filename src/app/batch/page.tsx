@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useBatch } from "@/components/BatchProvider";
 
@@ -8,18 +9,26 @@ export default function BatchPage() {
     rows,
     context,
     mode,
-    fileName,
     running,
     progress,
     error,
     doneCount,
+    columns,
+    questionCol,
+    answerCol,
+    fetching,
     setContext,
     setMode,
     loadFile,
+    loadFromUrl,
+    setQuestionCol,
+    setAnswerCol,
     run,
     stop,
     download,
   } = useBatch();
+
+  const [url, setUrl] = useState("");
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -101,17 +110,95 @@ export default function BatchPage() {
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleFile}
-            className="text-sm"
-          />
-          <span className="text-sm text-gray-500">
-            {rows.length > 0 ? `${rows.length} questions loaded` : "Column 'question' (or first column)"}
-          </span>
+        {/* Source: upload OR OneDrive/SharePoint link */}
+        <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleFile}
+              className="text-sm"
+            />
+            <span className="text-sm text-gray-500">
+              {rows.length > 0
+                ? `${rows.length} questions loaded`
+                : "Upload a file…"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="h-px flex-1 bg-gray-200" />
+            <span className="text-[11px] uppercase tracking-wide text-gray-400">
+              or paste a OneDrive / SharePoint link
+            </span>
+            <div className="h-px flex-1 bg-gray-200" />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://…-my.sharepoint.com/:x:/g/personal/…"
+              className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => loadFromUrl(url)}
+              disabled={fetching || !url.trim()}
+              className="rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
+            >
+              {fetching ? "Loading…" : "Load from link"}
+            </button>
+          </div>
+          <p className="text-[11px] text-gray-400">
+            The link must be shared as <b>“anyone with the link”</b>. Corporate
+            links that require sign-in cannot be downloaded automatically —
+            upload the file instead.
+          </p>
         </div>
+
+        {/* Column mapping (shown once a file is loaded) */}
+        {columns.length > 0 && (
+          <div className="flex flex-wrap items-end gap-4 rounded-lg border border-gray-200 bg-white p-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600">
+                Question column
+              </label>
+              <select
+                value={questionCol}
+                onChange={(e) => setQuestionCol(e.target.value)}
+                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none"
+              >
+                {columns.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600">
+                Answer column (where answers are written)
+              </label>
+              <select
+                value={answerCol}
+                onChange={(e) => setAnswerCol(e.target.value)}
+                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none"
+              >
+                <option value="">New “answer” column</option>
+                {columns.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <span className="pb-1.5 text-[11px] text-gray-400">
+              Auto-detected — change if your template uses different headers.
+            </span>
+          </div>
+        )}
 
         <div className="flex items-center gap-3">
           <button

@@ -20,6 +20,8 @@ export interface BatchRow {
   [key: string]: string;
 }
 
+export type BatchMode = "simple" | "detailed" | "bulleted";
+
 interface BatchContextValue {
   rows: BatchRow[];
   context: string;
@@ -29,17 +31,23 @@ interface BatchContextValue {
   progress: number;
   error: string | null;
   doneCount: number;
+  columns: string[];
+  questionCol: string;
+  answerCol: string;
+  fetching: boolean;
   setContext: (v: string) => void;
   setMode: (v: BatchMode) => void;
   loadFile: (file: File) => void;
+  loadFromUrl: (url: string) => Promise<void>;
+  setQuestionCol: (c: string) => void;
+  setAnswerCol: (c: string) => void;
   run: () => Promise<void>;
   stop: () => void;
   download: () => void;
 }
 
-export type BatchMode = "simple" | "detailed" | "bulleted";
-
-const QUESTION_KEYS = ["question", "pregunta", "questions", "q"];
+const QUESTION_KEYS = ["question", "pregunta", "questions", "q", "prompt"];
+const ANSWER_KEYS = ["answer", "respuesta", "answers", "a", "response", "reply"];
 
 const BatchContext = createContext<BatchContextValue | null>(null);
 
@@ -55,55 +63,128 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<BatchMode>("detailed");
   const [fileName, setFileName] = useState("");
   const [running, setRunning] = useState(false);
+  const [fetching, setFetching] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [columns, setColumns] = useState<string[]>([]);
+  const [questionCol, setQuestionColState] = useState("");
+  const [answerCol, setAnswerColState] = useState("");
   const stopRef = useRef(false);
   // Refs so the long-running loop always reads the latest values, even if the
   // user edits the context/style while it runs in the background.
   const rowsRef = useRef<BatchRow[]>([]);
   const contextRef = useRef("");
   const modeRef = useRef<BatchMode>("detailed");
+  const rawRef = useRef<Record<string, unknown>[]>([]);
+  const answerColRef = useRef("");
 
   rowsRef.current = rows;
   contextRef.current = context;
   modeRef.current = mode;
+  answerColRef.current = answerCol;
+
+  function detectColumn(cols: string[], keys: string[]): string {
+    return (
+      cols.find((c) => keys.includes(c.trim().toLowerCase())) ?? ""
+    );
+  }
+
+  function buildRows(
+    raw: Record<string, unknown>[],
+    qCol: string,
+    aCol: string,
+  ): BatchRow[] {
+    return raw
+      .map((r) => ({
+        ...r,
+        question: String(r[qCol] ?? "").trim(),
+        answer: aCol ? String(r[aCol] ?? "") : "",
+        expert: "",
+        sources: "",
+        status: "pending" as const,
+      }))
+      .filter((r) => r.question.length > 0);
+  }
+
+  function ingestArrayBuffer(buffer: ArrayBuffer, name: string) {
+    const wb = XLSX.read(buffer, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
+      defval: "",
+    });
+    if (json.length === 0) {
+      setError("The sheet is empty.");
+      return;
+    }
+    const cols = Object.keys(json[0]);
+    const qCol = detectColumn(cols, QUESTION_KEYS) || cols[0];
+    const aCol = detectColumn(cols, ANSWER_KEYS);
+
+    rawRef.current = json;
+    setColumns(cols);
+    setQuestionColState(qCol);
+    setAnswerColState(aCol);
+    setFileName(name);
+    setRows(buildRows(json, qCol, aCol));
+    setProgress(0);
+    setError(null);
+  }
 
   function loadFile(file: File) {
     setError(null);
-    setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
-        const wb = XLSX.read(ev.target?.result, { type: "array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
-          defval: "",
-        });
-        if (json.length === 0) {
-          setError("The sheet is empty.");
-          return;
-        }
-        const cols = Object.keys(json[0]);
-        const qCol =
-          cols.find((c) => QUESTION_KEYS.includes(c.trim().toLowerCase())) ??
-          cols[0];
-        const parsed: BatchRow[] = json
-          .map((r) => ({
-            ...r,
-            question: String(r[qCol] ?? "").trim(),
-            answer: String(r["answer"] ?? r["respuesta"] ?? ""),
-            expert: "",
-            sources: "",
-            status: "pending" as const,
-          }))
-          .filter((r) => r.question.length > 0);
-        setRows(parsed);
-        setProgress(0);
+        ingestArrayBuffer(ev.target?.result as ArrayBuffer, file.name);
       } catch (err) {
         setError("Could not read the file: " + (err as Error).message);
       }
     };
     reader.readAsArrayBuffer(file);
+  }
+
+  async function loadFromUrl(url: string) {
+    const link = url.trim();
+    if (!link) return;
+    setError(null);
+    setFetching(true);
+    try {
+      const res = await fetch("/api/batch/fetch", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: link }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      const buf = await res.arrayBuffer();
+      // Derive a filename from the URL if possible.
+      let name = "onedrive.xlsx";
+      try {
+        const last = new URL(link).pathname.split("/").filter(Boolean).pop();
+        if (last && /\.xlsx?$/i.test(last)) name = decodeURIComponent(last);
+      } catch {
+        /* ignore */
+      }
+      ingestArrayBuffer(buf, name);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setFetching(false);
+    }
+  }
+
+  function setQuestionCol(c: string) {
+    setQuestionColState(c);
+    setRows(buildRows(rawRef.current, c, answerColRef.current));
+    setProgress(0);
+  }
+
+  function setAnswerCol(c: string) {
+    setAnswerColState(c);
+    setRows(buildRows(rawRef.current, questionCol, c));
+    setProgress(0);
   }
 
   async function run() {
@@ -135,12 +216,14 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         if (!res.ok) throw new Error(data.error ?? "Error");
         setRows((prev) => {
           const next = [...prev];
+          const aCol = answerColRef.current;
           next[i] = {
             ...next[i],
             answer: data.answer,
             expert: data.expert,
             sources: data.tools,
             status: "done",
+            ...(aCol ? { [aCol]: data.answer } : {}),
           };
           return next;
         });
@@ -201,9 +284,16 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     progress,
     error,
     doneCount,
+    columns,
+    questionCol,
+    answerCol,
+    fetching,
     setContext,
     setMode,
     loadFile,
+    loadFromUrl,
+    setQuestionCol,
+    setAnswerCol,
     run,
     stop,
     download,
