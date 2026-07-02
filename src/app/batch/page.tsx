@@ -17,6 +17,8 @@ export default function BatchPage() {
     questionCol,
     answerCol,
     fetching,
+    startRow,
+    setStartRow,
     setContext,
     setMode,
     loadFile,
@@ -233,7 +235,22 @@ export default function BatchPage() {
           </div>
         )}
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {rows.length > 0 && (
+            <label className="flex items-center gap-2 text-sm text-gray-600">
+              Start from row
+              <input
+                type="number"
+                min={1}
+                max={rows.length}
+                value={startRow}
+                onChange={(e) => setStartRow(parseInt(e.target.value, 10))}
+                disabled={running}
+                className="w-20 rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none disabled:opacity-50"
+              />
+              <span className="text-[11px] text-gray-400">of {rows.length}</span>
+            </label>
+          )}
           <button
             onClick={run}
             disabled={running || rows.length === 0}

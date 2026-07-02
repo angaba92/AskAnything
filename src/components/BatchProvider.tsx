@@ -35,6 +35,8 @@ interface BatchContextValue {
   questionCol: string;
   answerCol: string;
   fetching: boolean;
+  startRow: number;
+  setStartRow: (v: number) => void;
   setContext: (v: string) => void;
   setMode: (v: BatchMode) => void;
   loadFile: (file: File) => void;
@@ -69,6 +71,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [columns, setColumns] = useState<string[]>([]);
   const [questionCol, setQuestionColState] = useState("");
   const [answerCol, setAnswerColState] = useState("");
+  const [startRow, setStartRowState] = useState(1);
   const stopRef = useRef(false);
   // Refs so the long-running loop always reads the latest values, even if the
   // user edits the context/style while it runs in the background.
@@ -77,11 +80,13 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const modeRef = useRef<BatchMode>("detailed");
   const rawRef = useRef<Record<string, unknown>[]>([]);
   const answerColRef = useRef("");
+  const startRowRef = useRef(1);
 
   rowsRef.current = rows;
   contextRef.current = context;
   modeRef.current = mode;
   answerColRef.current = answerCol;
+  startRowRef.current = startRow;
 
   function detectColumn(cols: string[], keys: string[]): string {
     return (
@@ -175,6 +180,12 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  function setStartRow(v: number) {
+    const total = rowsRef.current.length;
+    const clamped = Math.max(1, Math.min(v || 1, total || 1));
+    setStartRowState(clamped);
+  }
+
   function setQuestionCol(c: string) {
     setQuestionColState(c);
     setRows(buildRows(rawRef.current, c, answerColRef.current));
@@ -194,7 +205,9 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     stopRef.current = false;
 
     const total = rowsRef.current.length;
-    for (let i = 0; i < total; i++) {
+    const start = Math.max(0, Math.min(startRowRef.current - 1, total));
+    setProgress(start);
+    for (let i = start; i < total; i++) {
       if (stopRef.current) break;
       setRows((prev) => {
         const next = [...prev];
@@ -288,6 +301,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     questionCol,
     answerCol,
     fetching,
+    startRow,
+    setStartRow,
     setContext,
     setMode,
     loadFile,
