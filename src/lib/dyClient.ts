@@ -100,6 +100,7 @@ async function handle(res: Response): Promise<DyChatResponse> {
     );
   }
   if (!res.ok && res.status !== 304) {
+    const snippet = raw.slice(0, 400).replace(/\s+/g, " ").trim();
     // DY a veces devuelve 5xx / LLM_SERVICE_ERROR / INTERNAL_ERROR de forma
     // transitoria (sobre todo bajo la carga del batch). Lo marcamos como
     // reintentable para que sendMessageWithRetry lo reintente con backoff.
@@ -112,10 +113,10 @@ async function handle(res: Response): Promise<DyChatResponse> {
     ) {
       throw new DyTransientError(
         res.status,
-        "DY's AI service is temporarily unavailable (transient error). This is on Dynamic Yield's side — retrying with backoff."
+        `DY transient error [HTTP ${res.status}]: ${snippet || "(empty body)"}`,
       );
     }
-    throw new Error(`DY responded ${res.status}: ${raw.slice(0, 300)}`);
+    throw new Error(`DY responded ${res.status}: ${snippet}`);
   }
   return JSON.parse(raw) as DyChatResponse;
 }
@@ -192,7 +193,7 @@ export async function sendMessage(
   if (aiMsg && isInBandError(aiMsg.text)) {
     throw new DyTransientError(
       502,
-      "DY returned an in-band error (\"Something went wrong, try again.\"). Retrying…"
+      `DY in-band error (HTTP 200 but error text): "${(aiMsg.text || "(empty)").slice(0, 200)}"`,
     );
   }
   return parsed;
