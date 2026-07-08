@@ -13,11 +13,12 @@ export const dynamic = "force-dynamic";
  * plantilla de dyClient). structured=false/omitido → respuesta simple y concisa.
  */
 export async function POST(req: NextRequest) {
-  const { question, context, structured, mode } = (await req.json()) as {
+  const { question, context, structured, mode, threadId } = (await req.json()) as {
     question: string;
     context?: string;
     structured?: boolean;
     mode?: string;
+    threadId?: string;
   };
 
   if (!question?.trim()) {
@@ -31,8 +32,11 @@ export async function POST(req: NextRequest) {
     : `Answer the following question independently${concise}.\n\nQuestion: `;
 
   try {
-    const thread = await createThread();
-    const dy = await sendMessageWithRetry(thread.threadId, preamble + question.trim(), {
+    // Reutilizamos el hilo que envía el batch (como hace la conversación) para
+    // NO crear un hilo nuevo por pregunta: crear hilos en ráfaga es lo que DY
+    // rate-limita y provoca el error en cascada. Solo creamos uno si no viene.
+    const activeThreadId = threadId?.trim() || (await createThread()).threadId;
+    const dy = await sendMessageWithRetry(activeThreadId, preamble + question.trim(), {
       structured: Boolean(structured),
       mode,
     });
@@ -42,7 +46,7 @@ export async function POST(req: NextRequest) {
       answer: m?.text ?? "",
       expert: m?.agentMetadata?.expertSelected ?? "",
       tools: Array.from(new Set(m?.agentMetadata?.toolsUsed ?? [])).join(", "),
-      threadId: thread.threadId,
+      threadId: activeThreadId,
     });
   } catch (err) {
     if (err instanceof DyAuthError) {

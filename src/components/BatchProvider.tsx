@@ -51,6 +51,10 @@ interface BatchContextValue {
 
 const QUESTION_KEYS = ["question", "pregunta", "questions", "q", "prompt"];
 const ANSWER_KEYS = ["answer", "respuesta", "answers", "a", "response", "reply"];
+// Nº de preguntas que reutilizan el mismo hilo antes de crear uno nuevo. Reciclar
+// evita crear un hilo por pregunta (lo que DY rate-limita) sin acumular un
+// historial gigante en un único hilo.
+const THREAD_RECYCLE_EVERY = 15;
 
 const BatchContext = createContext<BatchContextValue | null>(null);
 
@@ -77,6 +81,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const stopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const rowAttempts = useRef<Record<number, number>>({});
+  // Hilo reutilizado por el batch (evita crear un hilo por pregunta, que es lo
+  // que DY rate-limita). Se recicla cada N preguntas para no acumular historial.
+  const batchThreadId = useRef<string | null>(null);
+  const threadUses = useRef(0);
   // Refs so the long-running loop always reads the latest values, even if the
   // user edits the context/style while it runs in the background.
   const rowsRef = useRef<BatchRow[]>([]);
@@ -224,6 +232,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     setError(null);
     stopRef.current = false;
     rowAttempts.current = {};
+    batchThreadId.current = null;
+    threadUses.current = 0;
 
     // Espera que se puede interrumpir al instante si el usuario pulsa Stop.
     const interruptibleSleep = (ms: number) =>
@@ -266,6 +276,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
             question: rowsRef.current[i].question,
             context: contextRef.current,
             mode: modeRef.current,
+            threadId: batchThreadId.current ?? undefined,
           }),
           signal: controller.signal,
         });
@@ -279,6 +290,15 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
             return next;
           });
           return "stopped";
+        }
+        // Guardamos/reciclamos el hilo reutilizado para no crear uno por pregunta.
+        if (data.threadId) {
+          batchThreadId.current = data.threadId;
+          threadUses.current += 1;
+          if (threadUses.current >= THREAD_RECYCLE_EVERY) {
+            batchThreadId.current = null;
+            threadUses.current = 0;
+          }
         }
         setRows((prev) => {
           const next = [...prev];
@@ -317,6 +337,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           setError((err as Error).message);
           return "stopped";
         }
+        // Tras un fallo, forzamos hilo nuevo en el siguiente intento por si el
+        // hilo actual quedó en mal estado.
+        batchThreadId.current = null;
+        threadUses.current = 0;
         return "error";
       } finally {
         abortRef.current = null;

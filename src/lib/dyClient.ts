@@ -207,7 +207,7 @@ export async function sendMessageWithRetry(
   message: string,
   opts: { structured?: boolean; mode?: string; retries?: number } = {}
 ): Promise<DyChatResponse> {
-  const retries = opts.retries ?? 5;
+  const retries = opts.retries ?? 2;
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
