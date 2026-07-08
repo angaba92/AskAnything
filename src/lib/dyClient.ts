@@ -117,32 +117,23 @@ async function handle(res: Response): Promise<DyChatResponse> {
     }
     throw new Error(`DY responded ${res.status}: ${raw.slice(0, 300)}`);
   }
-  const parsed = JSON.parse(raw) as DyChatResponse;
-  // DY a veces devuelve 200 con un mensaje de error "in-band" (p. ej.
-  // "Something went wrong, try again."). No es una respuesta válida: lo
-  // marcamos como transitorio para que sendMessageWithRetry lo reintente.
-  const aiMsg = parsed.messages?.find((m) => m.role === "ai");
-  if (aiMsg && isInBandError(aiMsg.text)) {
-    throw new DyTransientError(
-      502,
-      "DY returned an in-band error (\"Something went wrong, try again.\"). Retrying…"
-    );
-  }
-  return parsed;
+  return JSON.parse(raw) as DyChatResponse;
 }
 
 const IN_BAND_ERROR_PATTERNS = [
   /^\s*something went wrong,?\s*try again\.?\s*$/i,
   /^\s*try again later\.?\s*$/i,
-  /INTERNAL_ERROR/,
-  /LLM_SERVICE_ERROR/,
 ];
 
 /** Detecta mensajes de error que DY devuelve dentro de una respuesta 200. */
 function isInBandError(text: string): boolean {
   const t = (text ?? "").trim();
   if (!t) return true;
-  return IN_BAND_ERROR_PATTERNS.some((re) => re.test(t));
+  if (IN_BAND_ERROR_PATTERNS.some((re) => re.test(t))) return true;
+  // Códigos de error solo si el mensaje es corto (un blob de error, no prosa
+  // que casualmente los mencione).
+  if (t.length < 200 && /INTERNAL_ERROR|LLM_SERVICE_ERROR/.test(t)) return true;
+  return false;
 }
 
 /** Crea un nuevo thread vacío y devuelve su threadId. */
@@ -193,7 +184,18 @@ export async function sendMessage(
     cache: "no-store",
     redirect: "manual",
   });
-  return handle(res);
+  const parsed = await handle(res);
+  // Solo aquí (respuesta a un envío nuevo) comprobamos si DY devolvió un error
+  // "in-band" en un 200 (p. ej. "Something went wrong, try again."). NO se aplica
+  // a getThread para no romper la carga del historial si contiene un error antiguo.
+  const aiMsg = parsed.messages?.find((m) => m.role === "ai");
+  if (aiMsg && isInBandError(aiMsg.text)) {
+    throw new DyTransientError(
+      502,
+      "DY returned an in-band error (\"Something went wrong, try again.\"). Retrying…"
+    );
+  }
+  return parsed;
 }
 
 /**

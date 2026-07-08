@@ -76,6 +76,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [startRow, setStartRowState] = useState(1);
   const stopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const rowAttempts = useRef<Record<number, number>>({});
   // Refs so the long-running loop always reads the latest values, even if the
   // user edits the context/style while it runs in the background.
   const rowsRef = useRef<BatchRow[]>([]);
@@ -222,6 +223,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     setStopping(false);
     setError(null);
     stopRef.current = false;
+    rowAttempts.current = {};
 
     // Espera que se puede interrumpir al instante si el usuario pulsa Stop.
     const interruptibleSleep = (ms: number) =>
@@ -246,28 +248,14 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     const BASE_DELAY = 1200;
     let consecutiveErrors = 0;
 
-    for (let i = start; i < total; i++) {
-      if (stopRef.current) break;
-
-      const aCol = answerColRef.current;
-      const existing = String(rowsRef.current[i].answer ?? "").trim();
-      if (aCol && existing.length > 0) {
-        setRows((prev) => {
-          const next = [...prev];
-          next[i] = { ...next[i], status: "skipped" };
-          return next;
-        });
-        setProgress(i + 1);
-        continue;
-      }
-
+    // Procesa una fila. Devuelve "done" | "error" | "stopped".
+    async function processRow(i: number): Promise<"done" | "error" | "stopped"> {
       setRows((prev) => {
         const next = [...prev];
         next[i] = { ...next[i], status: "running" };
         return next;
       });
 
-      let rowFailed = false;
       try {
         const controller = new AbortController();
         abortRef.current = controller;
@@ -283,7 +271,6 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Error");
-        // Si pararon mientras llegaba la respuesta, no la escribimos como done.
         if (stopRef.current) {
           setRows((prev) => {
             const next = [...prev];
@@ -291,7 +278,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
               next[i] = { ...next[i], status: "pending" };
             return next;
           });
-          break;
+          return "stopped";
         }
         setRows((prev) => {
           const next = [...prev];
@@ -306,8 +293,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           };
           return next;
         });
+        return "done";
       } catch (err) {
-        // Abortado por el usuario (Stop): revertir a pending y salir sin marcar error.
         if ((err as Error).name === "AbortError" || stopRef.current) {
           setRows((prev) => {
             const next = [...prev];
@@ -315,9 +302,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
               next[i] = { ...next[i], status: "pending" };
             return next;
           });
-          break;
+          return "stopped";
         }
-        rowFailed = true;
         setRows((prev) => {
           const next = [...prev];
           next[i] = {
@@ -329,23 +315,94 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         });
         if (/sesi[oó]n|session|cookie|xsrf|caduc/i.test((err as Error).message)) {
           setError((err as Error).message);
-          break;
+          return "stopped";
         }
+        return "error";
       } finally {
         abortRef.current = null;
       }
-      setProgress(i + 1);
-      if (stopRef.current) break;
-
-      // Ralentización adaptativa: cada fallo dobla la espera (hasta ~15s);
-      // cada acierto la reduce. Así aliviamos a DY cuando empieza a saturarse.
-      if (rowFailed) consecutiveErrors++;
-      else consecutiveErrors = Math.max(0, consecutiveErrors - 1);
-      const backoff = Math.min(BASE_DELAY * 2 ** consecutiveErrors, 15000);
-      const jitter = backoff * (0.8 + Math.random() * 0.4);
-      await interruptibleSleep(jitter);
-      if (stopRef.current) break;
     }
+
+    // --- Pasada principal ---
+    // --- Bucle principal con "circuit breaker" ---
+    // Si DY empieza a devolver errores en cascada (rate-limit / cooldown), no
+    // tiene sentido seguir quemando filas: pausamos de verdad y reintentamos la
+    // MISMA fila tras una espera larga y creciente. Solo avanzamos cuando una
+    // fila se resuelve. Una fila solo se marca "error" definitivo si agota sus
+    // intentos con cooldown (evita que una pregunta "envenenada" bloquee todo).
+    const CASCADE_THRESHOLD = 2; // fallos seguidos antes de pausa larga
+    const MAX_ATTEMPTS_PER_ROW = 6; // intentos (con cooldown) antes de rendirse
+    let i = start;
+
+    while (i < total && !stopRef.current) {
+      const st = rowsRef.current[i].status;
+      // Saltamos filas ya resueltas (respondidas en el archivo de origen =
+      // "skipped", o ya completadas antes = "done").
+      if (st === "skipped" || st === "done") {
+        setProgress(i + 1);
+        i++;
+        continue;
+      }
+
+      const result = await processRow(i);
+      if (result === "stopped") break;
+
+      if (result === "done") {
+        consecutiveErrors = 0;
+        rowAttempts.current[i] = 0;
+        setProgress(i + 1);
+        i++;
+        // Ritmo normal entre filas.
+        await interruptibleSleep(BASE_DELAY * (0.8 + Math.random() * 0.4));
+        continue;
+      }
+
+      // result === "error"
+      consecutiveErrors++;
+      rowAttempts.current[i] = (rowAttempts.current[i] ?? 0) + 1;
+
+      // ¿Rendirse con esta fila? Solo tras muchos intentos con cooldown.
+      if (rowAttempts.current[i] >= MAX_ATTEMPTS_PER_ROW) {
+        setProgress(i + 1);
+        i++; // dejamos la fila en "error" y seguimos con la siguiente
+        continue;
+      }
+
+      // Circuit breaker: varios fallos seguidos => DY está caído/rate-limited.
+      // Pausa larga y creciente (1min, 2min, 3min… tope 5min) antes de
+      // reintentar la MISMA fila. Machacar solo alarga el castigo.
+      if (consecutiveErrors >= CASCADE_THRESHOLD) {
+        const cooldownMs = Math.min(60000 * (consecutiveErrors - 1), 300000);
+        setError(
+          `DY is returning repeated errors (likely rate-limited or down). ` +
+            `Pausing ${Math.round(cooldownMs / 1000)}s, then retrying row ${i + 1}. ` +
+            `Press Stop to cancel.`,
+        );
+        await interruptibleSleep(cooldownMs);
+        if (stopRef.current) break;
+        setError(null);
+        // No avanzamos: se reintenta la misma fila i.
+      } else {
+        // Fallo aislado: backoff corto y reintentar la misma fila.
+        await interruptibleSleep(
+          Math.min(BASE_DELAY * 2 ** consecutiveErrors, 15000) *
+            (0.8 + Math.random() * 0.4),
+        );
+        if (stopRef.current) break;
+      }
+    }
+
+    const remainingErrors = rowsRef.current.filter(
+      (r) => r.status === "error",
+    ).length;
+    if (remainingErrors > 0 && !stopRef.current) {
+      setError(
+        `${remainingErrors} row(s) still failing after multiple retries — DY's service may be down. Press Start again later to retry just those rows.`,
+      );
+    } else if (!stopRef.current) {
+      setError(null);
+    }
+
     setRunning(false);
     setStopping(false);
   }
