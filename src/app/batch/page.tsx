@@ -10,6 +10,7 @@ export default function BatchPage() {
     context,
     mode,
     running,
+    stopping,
     progress,
     error,
     doneCount,
@@ -261,9 +262,10 @@ export default function BatchPage() {
           {running && (
             <button
               onClick={stop}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50"
+              disabled={stopping}
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-60"
             >
-              Stop
+              {stopping ? "Stopping…" : "Stop"}
             </button>
           )}
           <button

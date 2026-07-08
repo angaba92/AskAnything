@@ -100,14 +100,49 @@ async function handle(res: Response): Promise<DyChatResponse> {
     );
   }
   if (!res.ok && res.status !== 304) {
-    // DY a veces devuelve 503 / LLM_SERVICE_ERROR de forma transitoria. Lo
-    // marcamos como reintetable para que sendMessage lo reintente.
-    if (res.status === 503 || /LLM_SERVICE_ERROR|temporarily unavailable|try again later/i.test(raw)) {
-      throw new DyTransientError(res.status, `DY temporarily unavailable: ${raw.slice(0, 200)}`);
+    // DY a veces devuelve 5xx / LLM_SERVICE_ERROR / INTERNAL_ERROR de forma
+    // transitoria (sobre todo bajo la carga del batch). Lo marcamos como
+    // reintentable para que sendMessageWithRetry lo reintente con backoff.
+    if (
+      res.status >= 500 ||
+      res.status === 429 ||
+      /LLM_SERVICE_ERROR|INTERNAL_ERROR|temporarily unavailable|try again later|rate.?limit|too many requests/i.test(
+        raw,
+      )
+    ) {
+      throw new DyTransientError(
+        res.status,
+        "DY's AI service is temporarily unavailable (transient error). This is on Dynamic Yield's side — retrying with backoff."
+      );
     }
     throw new Error(`DY responded ${res.status}: ${raw.slice(0, 300)}`);
   }
-  return JSON.parse(raw) as DyChatResponse;
+  const parsed = JSON.parse(raw) as DyChatResponse;
+  // DY a veces devuelve 200 con un mensaje de error "in-band" (p. ej.
+  // "Something went wrong, try again."). No es una respuesta válida: lo
+  // marcamos como transitorio para que sendMessageWithRetry lo reintente.
+  const aiMsg = parsed.messages?.find((m) => m.role === "ai");
+  if (aiMsg && isInBandError(aiMsg.text)) {
+    throw new DyTransientError(
+      502,
+      "DY returned an in-band error (\"Something went wrong, try again.\"). Retrying…"
+    );
+  }
+  return parsed;
+}
+
+const IN_BAND_ERROR_PATTERNS = [
+  /^\s*something went wrong,?\s*try again\.?\s*$/i,
+  /^\s*try again later\.?\s*$/i,
+  /INTERNAL_ERROR/,
+  /LLM_SERVICE_ERROR/,
+];
+
+/** Detecta mensajes de error que DY devuelve dentro de una respuesta 200. */
+function isInBandError(text: string): boolean {
+  const t = (text ?? "").trim();
+  if (!t) return true;
+  return IN_BAND_ERROR_PATTERNS.some((re) => re.test(t));
 }
 
 /** Crea un nuevo thread vacío y devuelve su threadId. */
@@ -170,7 +205,7 @@ export async function sendMessageWithRetry(
   message: string,
   opts: { structured?: boolean; mode?: string; retries?: number } = {}
 ): Promise<DyChatResponse> {
-  const retries = opts.retries ?? 3;
+  const retries = opts.retries ?? 5;
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -178,8 +213,10 @@ export async function sendMessageWithRetry(
     } catch (err) {
       lastErr = err;
       if (!(err instanceof DyTransientError) || attempt === retries) throw err;
-      // Backoff: 1.5s, 3s, 4.5s…
-      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      // Backoff exponencial con tope y jitter: ~2s, 4s, 8s, 16s, 30s (±30%).
+      const base = Math.min(2000 * 2 ** attempt, 30000);
+      const jitter = base * (0.7 + Math.random() * 0.6);
+      await new Promise((r) => setTimeout(r, jitter));
     }
   }
   throw lastErr;

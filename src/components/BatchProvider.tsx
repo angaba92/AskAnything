@@ -28,6 +28,7 @@ interface BatchContextValue {
   mode: BatchMode;
   fileName: string;
   running: boolean;
+  stopping: boolean;
   progress: number;
   error: string | null;
   doneCount: number;
@@ -65,6 +66,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<BatchMode>("detailed");
   const [fileName, setFileName] = useState("");
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +75,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [answerCol, setAnswerColState] = useState("");
   const [startRow, setStartRowState] = useState(1);
   const stopRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   // Refs so the long-running loop always reads the latest values, even if the
   // user edits the context/style while it runs in the background.
   const rowsRef = useRef<BatchRow[]>([]);
@@ -216,12 +219,33 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   async function run() {
     if (rowsRef.current.length === 0 || running) return;
     setRunning(true);
+    setStopping(false);
     setError(null);
     stopRef.current = false;
+
+    // Espera que se puede interrumpir al instante si el usuario pulsa Stop.
+    const interruptibleSleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        const step = 100;
+        let waited = 0;
+        const id = setInterval(() => {
+          waited += step;
+          if (stopRef.current || waited >= ms) {
+            clearInterval(id);
+            resolve();
+          }
+        }, step);
+      });
 
     const total = rowsRef.current.length;
     const start = Math.max(0, Math.min(startRowRef.current - 1, total));
     setProgress(start);
+
+    // Pausa base entre filas (ms) + ralentización adaptativa: si DY empieza a
+    // fallar, aumentamos la espera para no saturarlo; al ir bien, la bajamos.
+    const BASE_DELAY = 1200;
+    let consecutiveErrors = 0;
+
     for (let i = start; i < total; i++) {
       if (stopRef.current) break;
 
@@ -243,7 +267,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         return next;
       });
 
+      let rowFailed = false;
       try {
+        const controller = new AbortController();
+        abortRef.current = controller;
         const res = await fetch("/api/ask", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -252,9 +279,20 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
             context: contextRef.current,
             mode: modeRef.current,
           }),
+          signal: controller.signal,
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Error");
+        // Si pararon mientras llegaba la respuesta, no la escribimos como done.
+        if (stopRef.current) {
+          setRows((prev) => {
+            const next = [...prev];
+            if (next[i].status === "running")
+              next[i] = { ...next[i], status: "pending" };
+            return next;
+          });
+          break;
+        }
         setRows((prev) => {
           const next = [...prev];
           const writeCol = answerColRef.current;
@@ -269,6 +307,17 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           return next;
         });
       } catch (err) {
+        // Abortado por el usuario (Stop): revertir a pending y salir sin marcar error.
+        if ((err as Error).name === "AbortError" || stopRef.current) {
+          setRows((prev) => {
+            const next = [...prev];
+            if (next[i].status === "running")
+              next[i] = { ...next[i], status: "pending" };
+            return next;
+          });
+          break;
+        }
+        rowFailed = true;
         setRows((prev) => {
           const next = [...prev];
           next[i] = {
@@ -282,15 +331,29 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           setError((err as Error).message);
           break;
         }
+      } finally {
+        abortRef.current = null;
       }
       setProgress(i + 1);
-      await new Promise((r) => setTimeout(r, 600));
+      if (stopRef.current) break;
+
+      // Ralentización adaptativa: cada fallo dobla la espera (hasta ~15s);
+      // cada acierto la reduce. Así aliviamos a DY cuando empieza a saturarse.
+      if (rowFailed) consecutiveErrors++;
+      else consecutiveErrors = Math.max(0, consecutiveErrors - 1);
+      const backoff = Math.min(BASE_DELAY * 2 ** consecutiveErrors, 15000);
+      const jitter = backoff * (0.8 + Math.random() * 0.4);
+      await interruptibleSleep(jitter);
+      if (stopRef.current) break;
     }
     setRunning(false);
+    setStopping(false);
   }
 
   function stop() {
     stopRef.current = true;
+    setStopping(true);
+    abortRef.current?.abort();
   }
 
   function download() {
@@ -324,6 +387,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     mode,
     fileName,
     running,
+    stopping,
     progress,
     error,
     doneCount,
