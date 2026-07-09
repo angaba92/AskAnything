@@ -17,13 +17,13 @@ export type AnswerMode = "simple" | "detailed" | "bulleted";
 export const FORMAT_START = "[ANSWER FORMAT]";
 export const FORMAT_END = "[/ANSWER FORMAT]";
 
-const DETAILED_INSTRUCTIONS = `Structure your answer in EXACTLY these sections, in this order, using Markdown:
+const DETAILED_INSTRUCTIONS = `You MUST format your entire answer using the EXACT section structure below, in this order, using Markdown headers — even if the answer is short or you have limited information. Never reply with a single plain paragraph.
 
 ## Summary
 A single, high-level paragraph that answers the question directly. Be positive and constructive wherever it is reasonable to be.
 
 ## Details
-Develop the answer in 3 to 4 flowing paragraphs (no bullet points). Explain the reasoning in depth: how it works / how it is done, why it matters, and what it achieves (the value or benefit). Each paragraph should build on the previous one rather than repeating it.
+Develop the answer in 3 to 4 flowing paragraphs (no bullet points). If information is limited, still write at least one substantial paragraph here — never leave it empty or collapse everything into the Summary. Explain the reasoning in depth: how it works / how it is done, why it matters, and what it achieves (the value or benefit). Each paragraph should build on the previous one rather than repeating it.
 
 ## Example
 Give one concrete, practical example that illustrates the answer in a real scenario.
@@ -31,13 +31,13 @@ Give one concrete, practical example that illustrates the answer in a real scena
 ## References
 List the supporting sources as Markdown links with the full URLs to the relevant articles or documentation (e.g. - [Title](https://...)). Always include the URLs. If you genuinely have no sources, write "No specific references available.".`;
 
-const BULLETED_INSTRUCTIONS = `Structure your answer in EXACTLY these sections, in this order, using Markdown:
+const BULLETED_INSTRUCTIONS = `You MUST format your entire answer using the EXACT section structure below, in this order, using Markdown headers — even if the answer is short or you have limited information. Never reply with a single plain paragraph.
 
 ## Summary
 A single, high-level paragraph that answers the question directly. Be positive and constructive wherever it is reasonable to be.
 
 ## Details
-Develop the answer as a list of clear bullet points. Each bullet should cover one key idea — how it works / how it is done, why it matters, or what it achieves (the value or benefit). Use concise, substantial bullets (not one-liners) and sub-bullets where helpful.
+ALWAYS use Markdown bullet points here (lines starting with "- "). Never write this section as prose paragraphs. Provide at least 3 bullets; if information is limited, still split what you know into separate bullets. Each bullet covers one key idea — how it works / how it is done, why it matters, or what it achieves (the value or benefit). Use concise, substantial bullets and sub-bullets where helpful.
 
 ## Example
 Give one concrete, practical example that illustrates the answer in a real scenario.
