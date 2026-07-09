@@ -51,10 +51,11 @@ interface BatchContextValue {
 
 const QUESTION_KEYS = ["question", "pregunta", "questions", "q", "prompt"];
 const ANSWER_KEYS = ["answer", "respuesta", "answers", "a", "response", "reply"];
-// Nº de preguntas que reutilizan el mismo hilo antes de crear uno nuevo. Reciclar
-// evita crear un hilo por pregunta (lo que DY rate-limita) sin acumular un
-// historial gigante en un único hilo.
-const THREAD_RECYCLE_EVERY = 15;
+// Secciones DY entre las que rota el batch. Cada sección resuelve (server-side)
+// a un THREAD distinto y persistente. DY no ofrece reset de hilo, así que la
+// única forma de no saturar un hilo con cientos de mensajes es repartir las
+// preguntas entre varias secciones: cada hilo crece N veces más lento.
+const BATCH_SECTIONS = ["8787656", "8775500", "8794611"];
 
 const BatchContext = createContext<BatchContextValue | null>(null);
 
@@ -81,10 +82,13 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const stopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const rowAttempts = useRef<Record<number, number>>({});
-  // Hilo reutilizado por el batch (evita crear un hilo por pregunta, que es lo
-  // que DY rate-limita). Se recicla cada N preguntas para no acumular historial.
-  const batchThreadId = useRef<string | null>(null);
-  const threadUses = useRef(0);
+  // Rotación de secciones: repartimos las preguntas entre BATCH_SECTIONS. Cada
+  // sección tiene su propio hilo persistente en DY, que cacheamos aquí para no
+  // recrearlo en cada pregunta. `rotation` avanza en cada intento para ir
+  // saltando de sección (y de hilo) → ninguna se satura y, si un hilo queda en
+  // mal estado, el siguiente intento cae en otro distinto.
+  const sectionThreads = useRef<Record<string, string>>({});
+  const rotation = useRef(0);
   // Refs so the long-running loop always reads the latest values, even if the
   // user edits the context/style while it runs in the background.
   const rowsRef = useRef<BatchRow[]>([]);
@@ -232,8 +236,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     setError(null);
     stopRef.current = false;
     rowAttempts.current = {};
-    batchThreadId.current = null;
-    threadUses.current = 0;
+    sectionThreads.current = {};
+    rotation.current = 0;
 
     // Espera que se puede interrumpir al instante si el usuario pulsa Stop.
     const interruptibleSleep = (ms: number) =>
@@ -269,6 +273,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       try {
         const controller = new AbortController();
         abortRef.current = controller;
+        // Sección (y por tanto hilo) de esta pregunta. Rotamos en cada intento.
+        const section = BATCH_SECTIONS[rotation.current % BATCH_SECTIONS.length];
         const res = await fetch("/api/ask", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -276,7 +282,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
             question: rowsRef.current[i].question,
             context: contextRef.current,
             mode: modeRef.current,
-            threadId: batchThreadId.current ?? undefined,
+            sectionId: section,
+            threadId: sectionThreads.current[section] ?? undefined,
           }),
           signal: controller.signal,
         });
@@ -291,15 +298,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           });
           return "stopped";
         }
-        // Guardamos/reciclamos el hilo reutilizado para no crear uno por pregunta.
-        if (data.threadId) {
-          batchThreadId.current = data.threadId;
-          threadUses.current += 1;
-          if (threadUses.current >= THREAD_RECYCLE_EVERY) {
-            batchThreadId.current = null;
-            threadUses.current = 0;
-          }
-        }
+        // Cacheamos el hilo de esta sección y avanzamos la rotación para que la
+        // siguiente pregunta caiga en otra sección/hilo distintos.
+        if (data.threadId) sectionThreads.current[section] = data.threadId;
+        rotation.current += 1;
         setRows((prev) => {
           const next = [...prev];
           const writeCol = answerColRef.current;
@@ -337,10 +339,12 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           setError((err as Error).message);
           return "stopped";
         }
-        // Tras un fallo, forzamos hilo nuevo en el siguiente intento por si el
-        // hilo actual quedó en mal estado.
-        batchThreadId.current = null;
-        threadUses.current = 0;
+        // El hilo de esta sección pudo quedar en mal estado: lo descartamos y
+        // avanzamos la rotación para que el reintento caiga en otra sección/hilo.
+        const failedSection =
+          BATCH_SECTIONS[rotation.current % BATCH_SECTIONS.length];
+        delete sectionThreads.current[failedSection];
+        rotation.current += 1;
         return "error";
       } finally {
         abortRef.current = null;

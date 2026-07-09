@@ -13,12 +13,13 @@ export const dynamic = "force-dynamic";
  * plantilla de dyClient). structured=false/omitido → respuesta simple y concisa.
  */
 export async function POST(req: NextRequest) {
-  const { question, context, structured, mode, threadId } = (await req.json()) as {
+  const { question, context, structured, mode, threadId, sectionId } = (await req.json()) as {
     question: string;
     context?: string;
     structured?: boolean;
     mode?: string;
     threadId?: string;
+    sectionId?: string;
   };
 
   if (!question?.trim()) {
@@ -32,13 +33,15 @@ export async function POST(req: NextRequest) {
     : `Answer the following question independently${concise}.\n\nQuestion: `;
 
   try {
-    // Reutilizamos el hilo que envía el batch (como hace la conversación) para
-    // NO crear un hilo nuevo por pregunta: crear hilos en ráfaga es lo que DY
-    // rate-limita y provoca el error en cascada. Solo creamos uno si no viene.
-    const activeThreadId = threadId?.trim() || (await createThread()).threadId;
+    // El batch rota `sectionId` cada N preguntas: cada sección resuelve a un
+    // hilo distinto en DY, repartiendo la memoria y evitando que un único hilo
+    // se sature. La sección debe usarse tanto al crear el hilo como al enviar.
+    const section = sectionId?.trim() || undefined;
+    const activeThreadId = threadId?.trim() || (await createThread(section)).threadId;
     const dy = await sendMessageWithRetry(activeThreadId, preamble + question.trim(), {
       structured: Boolean(structured),
       mode,
+      sectionId: section,
     });
     const m = dy.messages[0];
     return NextResponse.json({

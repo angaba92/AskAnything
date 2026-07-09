@@ -49,10 +49,13 @@ function extractXsrf(cookie: string): string | undefined {
   return m ? decodeURIComponent(m[1]) : undefined;
 }
 
-async function authHeaders(extra: Record<string, string> = {}): Promise<HeadersInit> {
+async function authHeaders(
+  extra: Record<string, string> = {},
+  sectionOverride?: string,
+): Promise<HeadersInit> {
   const session = await getDySession();
   const cookie = session.cookie;
-  const sectionId = session.sectionId;
+  const sectionId = (sectionOverride ?? "").trim() || session.sectionId;
   // El x-xsrf-token es el valor de la cookie XSRF-TOKEN; lo derivamos de la
   // cookie para que nunca se desincronicen. Permitimos override manual.
   const xsrf = process.env.DY_XSRF_TOKEN || (cookie ? extractXsrf(cookie) : undefined);
@@ -138,10 +141,10 @@ function isInBandError(text: string): boolean {
 }
 
 /** Crea un nuevo thread vacío y devuelve su threadId. */
-export async function createThread(): Promise<DyChatResponse> {
+export async function createThread(sectionId?: string): Promise<DyChatResponse> {
   const res = await fetch(`${BASE}/agents/chats/new`, {
     method: "POST",
-    headers: await authHeaders(),
+    headers: await authHeaders({}, sectionId),
     cache: "no-store",
     redirect: "manual",
   });
@@ -156,31 +159,32 @@ export async function createThread(): Promise<DyChatResponse> {
 export async function sendMessage(
   threadId: string,
   message: string,
-  opts: { structured?: boolean; mode?: string } = {}
+  opts: { structured?: boolean; mode?: string; sectionId?: string } = {}
 ): Promise<DyChatResponse> {
-  const sectionId = Number((await getDySession()).sectionId || "0");
   const mode = resolveMode(opts);
   const text =
     mode !== "simple" && isTemplateEnabled()
       ? wrapWithTemplate(message, mode)
       : message;
+  // El body debe ser idéntico al de la UI de DY: la sección viaja SOLO en el
+  // header `dy_section_id` (ver authHeaders), NO dentro de userAdditionalData.
   const body = {
     message: text,
     scope: "test",
     userAdditionalData: {
-      sectionId,
       availableSkills: [
         "ask_anything:knowledge_base",
         "impactReport:generate_impact_report",
         "alertNotification:investigate_my_alerts",
         "productFeed:affinity_property_ranker",
         "reportHistory:ab_test_history",
+        "reportSummary:analyze_recommendation_program",
       ],
     },
   };
   const res = await fetch(`${BASE}/agents/chats/${threadId}`, {
     method: "POST",
-    headers: await authHeaders(),
+    headers: await authHeaders({}, opts.sectionId),
     body: JSON.stringify(body),
     cache: "no-store",
     redirect: "manual",
@@ -206,7 +210,7 @@ export async function sendMessage(
 export async function sendMessageWithRetry(
   threadId: string,
   message: string,
-  opts: { structured?: boolean; mode?: string; retries?: number } = {}
+  opts: { structured?: boolean; mode?: string; retries?: number; sectionId?: string } = {}
 ): Promise<DyChatResponse> {
   const retries = opts.retries ?? 2;
   let lastErr: unknown;
