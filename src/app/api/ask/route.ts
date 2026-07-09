@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createThread, sendMessageWithRetry, DyAuthError } from "@/lib/dyClient";
+import { plainifyAnswer, enforceBullets, resolveMode } from "@/lib/promptTemplate";
 
 export const dynamic = "force-dynamic";
 
@@ -44,9 +45,13 @@ export async function POST(req: NextRequest) {
       sectionId: section,
     });
     const m = dy.messages[0];
+    let answer = plainifyAnswer(m?.text ?? "");
+    if (resolveMode({ mode, structured }) === "bulleted") {
+      answer = enforceBullets(answer);
+    }
     return NextResponse.json({
       ok: true,
-      answer: m?.text ?? "",
+      answer,
       expert: m?.agentMetadata?.expertSelected ?? "",
       tools: Array.from(new Set(m?.agentMetadata?.toolsUsed ?? [])).join(", "),
       threadId: activeThreadId,

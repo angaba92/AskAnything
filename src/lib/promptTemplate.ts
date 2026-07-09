@@ -17,33 +17,17 @@ export type AnswerMode = "simple" | "detailed" | "bulleted";
 export const FORMAT_START = "[ANSWER FORMAT]";
 export const FORMAT_END = "[/ANSWER FORMAT]";
 
-const DETAILED_INSTRUCTIONS = `You MUST format your entire answer using the EXACT section structure below, in this order, using Markdown headers — even if the answer is short or you have limited information. Never reply with a single plain paragraph.
+const DETAILED_INSTRUCTIONS = `Write the answer in PLAIN TEXT only. Do NOT use Markdown of any kind: no "#" headings, no "**" or "*" for bold/italic, no bullet dashes, and no section titles like "Summary", "Details", "Example" or "References".
 
-## Summary
-A single, high-level paragraph that answers the question directly. Be positive and constructive wherever it is reasonable to be.
+Begin with one short paragraph that answers the question directly and positively. Then add 2 to 3 more short paragraphs that explain how it works, why it matters, and include a concrete real-world example woven into the prose. Keep everything as flowing, natural prose.
 
-## Details
-Develop the answer in 3 to 4 flowing paragraphs (no bullet points). If information is limited, still write at least one substantial paragraph here — never leave it empty or collapse everything into the Summary. Explain the reasoning in depth: how it works / how it is done, why it matters, and what it achieves (the value or benefit). Each paragraph should build on the previous one rather than repeating it.
+If you have supporting documentation, finish with a single final line that starts with "Sources: " followed by the full URL(s), separated by "; ". If you genuinely have no sources, omit that line entirely.`;
 
-## Example
-Give one concrete, practical example that illustrates the answer in a real scenario.
+const BULLETED_INSTRUCTIONS = `Write the answer in PLAIN TEXT only. Do NOT use Markdown of any kind: no "#" headings, no "**" or "*" for bold/italic, and no section titles like "Summary", "Details", "Example" or "References".
 
-## References
-List the supporting sources as Markdown links with the full URLs to the relevant articles or documentation (e.g. - [Title](https://...)). Always include the URLs. If you genuinely have no sources, write "No specific references available.".`;
+Begin with one short sentence that answers the question directly and positively. Then list the key points, each on its own line starting with "• " (a real bullet character, not a dash or asterisk). Provide at least 3 points, each a concise but substantial idea — how it works, why it matters, or the value it delivers. You may add one concrete example as a final bullet.
 
-const BULLETED_INSTRUCTIONS = `You MUST format your entire answer using the EXACT section structure below, in this order, using Markdown headers — even if the answer is short or you have limited information. Never reply with a single plain paragraph.
-
-## Summary
-A single, high-level paragraph that answers the question directly. Be positive and constructive wherever it is reasonable to be.
-
-## Details
-ALWAYS use Markdown bullet points here (lines starting with "- "). Never write this section as prose paragraphs. Provide at least 3 bullets; if information is limited, still split what you know into separate bullets. Each bullet covers one key idea — how it works / how it is done, why it matters, or what it achieves (the value or benefit). Use concise, substantial bullets and sub-bullets where helpful.
-
-## Example
-Give one concrete, practical example that illustrates the answer in a real scenario.
-
-## References
-List the supporting sources as Markdown links with the full URLs to the relevant articles or documentation (e.g. - [Title](https://...)). Always include the URLs. If you genuinely have no sources, write "No specific references available.".`;
+If you have supporting documentation, finish with a single final line that starts with "Sources: " followed by the full URL(s), separated by "; ". If you genuinely have no sources, omit that line entirely.`;
 
 /** Activa/desactiva la plantilla vía env (por defecto: activada). */
 export function isTemplateEnabled(): boolean {
@@ -66,12 +50,16 @@ export function resolveMode(input: {
   return input.structured ? "detailed" : "simple";
 }
 
-/** Envuelve la pregunta con las instrucciones de formato del modo elegido. */
+/** Envuelve la pregunta con las instrucciones de formato del modo elegido.
+ * Las instrucciones van AL FINAL (justo tras la pregunta): por recencia, el
+ * agente les da mucho más peso que al historial del hilo, que es lo que hacía
+ * que a veces se saltara el formato al rotar entre secciones con historiales
+ * distintos. */
 export function wrapWithTemplate(question: string, mode: AnswerMode): string {
   if (mode === "simple") return question.trim();
   const instructions =
     mode === "bulleted" ? BULLETED_INSTRUCTIONS : DETAILED_INSTRUCTIONS;
-  return `${FORMAT_START}\n${instructions}\n${FORMAT_END}\n\nQuestion: ${question.trim()}`;
+  return `${question.trim()}\n\n${FORMAT_START}\n${instructions}\n${FORMAT_END}`;
 }
 
 /**
@@ -80,8 +68,87 @@ export function wrapWithTemplate(question: string, mode: AnswerMode): string {
  * con la plantilla incluida.
  */
 export function stripTemplate(text: string): string {
-  const re = /^\s*\[ANSWER FORMAT\][\s\S]*?\[\/ANSWER FORMAT\]\s*/i;
+  // El bloque de formato puede ir al inicio o al final del mensaje.
+  const re = /\s*\[ANSWER FORMAT\][\s\S]*?\[\/ANSWER FORMAT\]\s*/i;
   let t = text.replace(re, "");
   t = t.replace(/^Question:\s*/i, "");
   return t.trim();
+}
+
+/**
+ * Convierte una respuesta con Markdown a texto plano apto para una celda de
+ * Excel: quita cabeceras (## …), negritas/cursivas, transforma enlaces
+ * [txt](url) en "txt (url)", normaliza viñetas a "• " y elimina las líneas que
+ * son solo un rótulo de sección (Summary/Details/Example/References). Es una red
+ * de seguridad por si el agente ignora la instrucción de "texto plano".
+ */
+export function plainifyAnswer(text: string): string {
+  let t = text ?? "";
+  // Enlaces Markdown [label](url) -> "label (url)".
+  t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1 ($2)");
+  // Negritas/cursivas.
+  t = t.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1");
+  t = t.replace(/(^|[\s(])\*([^*\n]+?)\*(?=[\s).,;:!?]|$)/g, "$1$2");
+
+  const dropLabel =
+    /^(summary|details|example|examples|references|sources?|fuentes?)\s*:?\s*$/i;
+  const lines = t.split(/\r?\n/).map((line) => {
+    const h = line.match(/^\s{0,3}#{1,6}\s*(.*)$/);
+    if (h) {
+      const label = h[1].trim();
+      return dropLabel.test(label) ? null : label; // rótulo solo -> fuera
+    }
+    // Viñetas Markdown (-, *, +) -> "• ".
+    return line.replace(/^(\s{0,3})[-*+]\s+/, "$1• ");
+  });
+
+  return lines
+    .filter((l) => l !== null)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Garantía determinista para el modo "bulleted": si el agente ignoró el formato
+ * y devolvió prosa, la convertimos nosotros a viñetas (una frase por bullet),
+ * dejando la primera frase como intro y respetando una línea final "Sources:".
+ * Si ya trae viñetas ("• "), no toca nada. Así, cuando el usuario elige
+ * bulleted, SIEMPRE recibe viñetas, sin depender de si el LLM cumplió.
+ */
+export function enforceBullets(text: string): string {
+  const t = (text ?? "").trim();
+  if (!t) return t;
+  const rawLines = t.split(/\r?\n/);
+  // ¿Ya hay viñetas? Entonces el agente cumplió: no tocamos nada.
+  if (rawLines.some((l) => /^\s*•\s+/.test(l))) return t;
+
+  // Separamos una posible sección final de fuentes (esté en su propia línea o
+  // inline), ANTES de trocear en frases, para que las URLs no se partan.
+  let sources = "";
+  let work = t;
+  const sm = work.match(/(?:^|\n|\s)(?:sources?|fuentes?)\s*:\s*([\s\S]+?)\s*$/i);
+  if (sm && sm.index !== undefined) {
+    sources = "Sources: " + sm[1].replace(/\s+/g, " ").trim();
+    work = work.slice(0, sm.index).trim();
+  }
+
+  const prose = work.replace(/\s+/g, " ").trim();
+  if (!prose) return sources || t;
+
+  // Partimos en frases (respetando el punto final). El lookahead exige espacio
+  // o fin tras el signo, así una URL como "dy.dev" no se corta.
+  const sentences =
+    prose.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g)?.map((s) => s.trim()).filter(Boolean) ??
+    [prose];
+
+  const parts: string[] = [];
+  if (sentences.length <= 1) {
+    parts.push("• " + sentences[0]);
+  } else {
+    parts.push(sentences[0]); // intro
+    for (const s of sentences.slice(1)) parts.push("• " + s);
+  }
+  if (sources) parts.push(sources);
+  return parts.join("\n");
 }
