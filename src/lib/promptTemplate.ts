@@ -19,13 +19,13 @@ export const FORMAT_END = "[/ANSWER FORMAT]";
 
 const DETAILED_INSTRUCTIONS = `Write the answer in PLAIN TEXT only. Do NOT use Markdown of any kind: no "#" headings, no "**" or "*" for bold/italic, no bullet dashes, and no section titles like "Summary", "Details", "Example" or "References".
 
-Begin with one short paragraph that answers the question directly and positively. Then add 2 to 3 more short paragraphs that explain how it works, why it matters, and include a concrete real-world example woven into the prose. Keep everything as flowing, natural prose.
+Begin with one clear paragraph that answers the question directly and positively. Then add 3 to 4 well-developed paragraphs that explain in depth how it works, why it matters, and the value or benefit it delivers, followed by one paragraph with a concrete, real-world example. Be thorough and comprehensive — this is the long, detailed format. Keep everything as flowing, natural prose (no bullet points).
 
 If you have supporting documentation, finish with a single final line that starts with "Sources: " followed by the full URL(s), separated by "; ". If you genuinely have no sources, omit that line entirely.`;
 
 const BULLETED_INSTRUCTIONS = `Write the answer in PLAIN TEXT only. Do NOT use Markdown of any kind: no "#" headings, no "**" or "*" for bold/italic, and no section titles like "Summary", "Details", "Example" or "References".
 
-Begin with one short sentence that answers the question directly and positively. Then list the key points, each on its own line starting with "• " (a real bullet character, not a dash or asterisk). Provide at least 3 points, each a concise but substantial idea — how it works, why it matters, or the value it delivers. You may add one concrete example as a final bullet.
+Begin with a short intro that answers the question directly and positively — as long as it needs to be to actually address the question. Then add up to 5 bullet points (fewer is fine), each on its own line starting with "• " (a real bullet character, not a dash or asterisk). Each bullet must be concise but complete — one clear idea, not too long, no sub-bullets. After the bullets, add one line with a quick concrete example starting with "Example: ".
 
 If you have supporting documentation, finish with a single final line that starts with "Sources: " followed by the full URL(s), separated by "; ". If you genuinely have no sources, omit that line entirely.`;
 

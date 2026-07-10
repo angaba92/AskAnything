@@ -18,6 +18,8 @@ model Thread {
   title     String   @default("New conversation")
   status    String   @default("New") // New | InProgress | Waiting | Done
   tags      String   @default("[]") // JSON array de strings
+  section   String?  // dy_section_id con el que se creó (para reusar el mismo al enviar)
+  owner     String?  // nombre del usuario que abrió la conversación (etiqueta, no auth)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   messages  Message[]

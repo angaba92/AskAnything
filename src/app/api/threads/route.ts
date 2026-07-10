@@ -20,6 +20,7 @@ export async function GET() {
       title: t.title,
       status: t.status,
       tags: JSON.parse(t.tags) as string[],
+      owner: t.owner ?? null,
       updatedAt: t.updatedAt,
       lastMessage: t.messages[0]?.text ?? "",
     }))

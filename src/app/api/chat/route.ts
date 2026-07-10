@@ -36,10 +36,13 @@ export async function POST(req: NextRequest) {
   });
 
   try {
-    // Enviamos a DY con el estilo elegido (simple / detailed / bulleted).
+    // Enviamos a DY con el estilo elegido (simple / detailed / bulleted) y con
+    // la MISMA sección con la que se creó el thread (para no colisionar con el
+    // batch ni con otras conversaciones).
     const dy = await sendMessageWithRetry(threadId, message, {
       structured: structured !== false,
       mode,
+      sectionId: existing?.section ?? undefined,
     });
     await persistMessages(threadId, dy.messages);
     // ...y reconciliamos con el historial autoritativo (incluye el mensaje

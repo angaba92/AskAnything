@@ -21,7 +21,12 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [copilotQuestion, setCopilotQuestion] = useState<string | null>(null);
   const [mode, setMode] = useState<"simple" | "detailed" | "bulleted">("detailed");
+  const [owner, setOwner] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setOwner(localStorage.getItem("askanything_owner") ?? "");
+  }, []);
 
   const loadThreads = useCallback(async () => {
     const res = await fetch("/api/threads");
@@ -52,7 +57,19 @@ export default function Home() {
 
   async function handleNew() {
     setError(null);
-    const res = await fetch("/api/threads/new", { method: "POST" });
+    let name = owner;
+    if (!name) {
+      name = (window.prompt("Your name (to label this conversation):") ?? "").trim();
+      if (name) {
+        localStorage.setItem("askanything_owner", name);
+        setOwner(name);
+      }
+    }
+    const res = await fetch("/api/threads/new", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ owner: name || undefined }),
+    });
     if (res.ok) {
       const { id } = await res.json();
       await loadThreads();

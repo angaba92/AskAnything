@@ -21,6 +21,7 @@ export interface ThreadListItem {
   title: string;
   status: ThreadStatus;
   tags: string[];
+  owner?: string | null;
   updatedAt: string;
   lastMessage: string;
 }
