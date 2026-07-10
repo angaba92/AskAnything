@@ -108,6 +108,15 @@ export default function BatchPage() {
             </button>
             <button
               type="button"
+              onClick={() => setMode("loopio")}
+              className={`border-l border-gray-300 px-2.5 py-1 ${
+                mode === "loopio" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              Loopio (RFP)
+            </button>
+            <button
+              type="button"
               onClick={() => setMode("simple")}
               className={`border-l border-gray-300 px-2.5 py-1 ${
                 mode === "simple" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
@@ -121,6 +130,8 @@ export default function BatchPage() {
               ? "Structured: Summary · Details · Example · References"
               : mode === "bulleted"
               ? "Structured: Summary · bullet Details · Example · References"
+              : mode === "loopio"
+              ? "RFP style: verdict · themed sections · example · source"
               : "Short, direct answer (best for spreadsheet cells)"}
           </span>
         </div>

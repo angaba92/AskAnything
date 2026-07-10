@@ -20,7 +20,7 @@ export default function Home() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copilotQuestion, setCopilotQuestion] = useState<string | null>(null);
-  const [mode, setMode] = useState<"simple" | "detailed" | "bulleted">("detailed");
+  const [mode, setMode] = useState<"simple" | "detailed" | "bulleted" | "loopio">("detailed");
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -255,6 +255,15 @@ export default function Home() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => setMode("loopio")}
+                    className={`border-l border-gray-300 px-2.5 py-1 ${
+                      mode === "loopio" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                    }`}
+                  >
+                    Loopio (RFP)
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setMode("simple")}
                     className={`border-l border-gray-300 px-2.5 py-1 ${
                       mode === "simple" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
@@ -268,6 +277,8 @@ export default function Home() {
                     ? "Summary · Details · Example · References"
                     : mode === "bulleted"
                     ? "Summary · bullet Details · Example · References"
+                    : mode === "loopio"
+                    ? "Verdict · themed sections · example · source (RFP style)"
                     : "Short, direct answer"}
                 </span>
               </div>

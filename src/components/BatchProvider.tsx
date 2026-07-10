@@ -20,7 +20,7 @@ export interface BatchRow {
   [key: string]: string;
 }
 
-export type BatchMode = "simple" | "detailed" | "bulleted";
+export type BatchMode = "simple" | "detailed" | "bulleted" | "loopio";
 
 interface BatchContextValue {
   rows: BatchRow[];

@@ -12,7 +12,7 @@
  * eliminarlo del mensaje humano que se muestra/guarda (ver stripTemplate).
  */
 
-export type AnswerMode = "simple" | "detailed" | "bulleted";
+export type AnswerMode = "simple" | "detailed" | "bulleted" | "loopio";
 
 export const FORMAT_START = "[ANSWER FORMAT]";
 export const FORMAT_END = "[/ANSWER FORMAT]";
@@ -29,11 +29,23 @@ Structure the answer exactly like this, with blank lines between the blocks:
 
 First, one or two sentences that directly answer the question at a high level (a clear yes/no plus the essence).
 
-Then a short lead-in sentence followed by a bullet list that covers ALL the relevant points needed to fully answer — include as many bullets as necessary, do not artificially limit them. Each bullet goes on its own line starting with "• " (a real bullet character, not a dash or asterisk) and is a complete, specific point (a full clause or sentence). Be thorough and concrete.
+Then a short lead-in sentence followed by a bullet list of the main points. Prefer FEWER but well-developed bullets over many short ones: aim for roughly 4 to 7 bullets, each a substantial, self-contained point that fully explains the idea (a couple of sentences is fine). Do not pad the list with trivial points; merge related ideas into one richer bullet. Each bullet goes on its own line starting with "• " (a real bullet character, not a dash or asterisk).
 
-Then one short paragraph with a practical, real-world example (plain prose, NO label before it).
+Then one short paragraph with a practical, real-world example. Introduce it naturally in the same sentence, starting with "As an example, " (do NOT put a label or heading before it).
 
 If you have supporting documentation, finish with a single final line that starts with "Sources: " followed by the full URL(s), separated by "; ". If you genuinely have no sources, omit that line entirely.`;
+
+const LOOPIO_INSTRUCTIONS = `Write the answer in PLAIN TEXT only (RFP/questionnaire style). Do NOT use Markdown: no "#", no "**"/"*" for bold/italic, no dashes for bullets. Use "• " (a real bullet character) for bullets.
+
+Follow this exact structure, with a blank line between blocks:
+
+1) A one-sentence verdict that starts with "Yes." or "No." or "Partially." followed by "Mastercard Dynamic Yield " and the essence of the answer.
+
+2) One or more short THEMED sections. Each section begins with a very short heading of 2 to 4 words in plain text (Title case, NOT all caps, NO colon, NO markdown), on its own line — for example "Placement options", "Control", "Configuration", "Measurement and optimization". Under each heading, list its points as "• " bullets, each a complete, specific point. Use a SINGLE section for simple answers and MULTIPLE sections only when the answer has distinct themes. Group related points under the right heading instead of one long flat list.
+
+3) One short paragraph introduced naturally with "For example, ".
+
+4) A closing line that starts with "For more information, please refer to our " followed by the resource name and its full URL in parentheses, e.g. "For more information, please refer to our Recommendation Strategies article (https://support.dynamicyield.com/hc/en-us/articles/360022554694-Recommendation-Strategies)." You may cite more than one, joined with " and our ". If you genuinely have no source, omit this line.`;
 
 /** Activa/desactiva la plantilla vía env (por defecto: activada). */
 export function isTemplateEnabled(): boolean {
@@ -48,7 +60,8 @@ export function resolveMode(input: {
   if (
     input.mode === "detailed" ||
     input.mode === "bulleted" ||
-    input.mode === "simple"
+    input.mode === "simple" ||
+    input.mode === "loopio"
   ) {
     return input.mode;
   }
@@ -64,7 +77,11 @@ export function resolveMode(input: {
 export function wrapWithTemplate(question: string, mode: AnswerMode): string {
   if (mode === "simple") return question.trim();
   const instructions =
-    mode === "bulleted" ? BULLETED_INSTRUCTIONS : DETAILED_INSTRUCTIONS;
+    mode === "bulleted"
+      ? BULLETED_INSTRUCTIONS
+      : mode === "loopio"
+      ? LOOPIO_INSTRUCTIONS
+      : DETAILED_INSTRUCTIONS;
   return `${question.trim()}\n\n${FORMAT_START}\n${instructions}\n${FORMAT_END}`;
 }
 
