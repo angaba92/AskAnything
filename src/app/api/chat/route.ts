@@ -53,9 +53,20 @@ export async function POST(req: NextRequest) {
         : [];
     await persistMessages(threadId, dy.messages, { bulletedAiIds });
     // ...y reconciliamos con el historial autoritativo (incluye el mensaje
-    // humano con su id/seqId reales, evitando duplicados).
+    // humano con su id/seqId reales, evitando duplicados). Los ids de DY aquí
+    // pueden diferir de los de la respuesta directa, así que para forzar las
+    // viñetas apuntamos a la respuesta IA más reciente por seqId.
     const full = await getThread(threadId);
-    await persistMessages(threadId, full.messages, { bulletedAiIds });
+    let reconcileBulleted: string[] = [];
+    if (resolveMode({ mode, structured }) === "bulleted") {
+      const latestAi = full.messages
+        .filter((m) => m.role !== "human")
+        .sort((a, b) => (b.seqId ?? 0) - (a.seqId ?? 0))[0];
+      if (latestAi) reconcileBulleted = [latestAi.id];
+    }
+    await persistMessages(threadId, full.messages, {
+      bulletedAiIds: reconcileBulleted,
+    });
     return NextResponse.json({ ok: true, messages: dy.messages });
   } catch (err) {
     if (err instanceof DyAuthError) {

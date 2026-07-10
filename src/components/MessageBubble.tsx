@@ -1,7 +1,25 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
 import type { ChatMessage } from "@/lib/types";
+
+/** Renderiza texto plano preservando saltos de línea y haciendo clicables las URLs. */
+function renderPlain(text: string) {
+  return text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+    /^https?:\/\//.test(part) ? (
+      <a
+        key={i}
+        href={part.replace(/[.,;:)]+$/, "")}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-brand underline underline-offset-2 hover:text-brand-dark"
+      >
+        {part}
+      </a>
+    ) : (
+      <span key={i}>{part}</span>
+    )
+  );
+}
 
 export default function MessageBubble({ m }: { m: ChatMessage }) {
   const isHuman = m.role === "human";
@@ -14,28 +32,9 @@ export default function MessageBubble({ m }: { m: ChatMessage }) {
             : "bg-white border border-gray-200 text-gray-800"
         }`}
       >
-        {isHuman ? (
-          <p className="whitespace-pre-wrap">{m.text}</p>
-        ) : (
-          <div className="markdown">
-            <ReactMarkdown
-              components={{
-                a: ({ href, children }) => (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-brand underline underline-offset-2 hover:text-brand-dark"
-                  >
-                    {children}
-                  </a>
-                ),
-              }}
-            >
-              {m.text}
-            </ReactMarkdown>
-          </div>
-        )}
+        <p className="whitespace-pre-wrap">
+          {isHuman ? m.text : renderPlain(m.text)}
+        </p>
         {!isHuman && m.meta?.agentMetadata?.expertSelected && (
           <div className="mt-2 flex flex-wrap gap-1 text-[11px] text-gray-400">
             <span className="rounded bg-gray-100 px-1.5 py-0.5">

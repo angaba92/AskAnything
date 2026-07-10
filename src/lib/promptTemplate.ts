@@ -23,9 +23,15 @@ Begin with one clear paragraph that answers the question directly and positively
 
 If you have supporting documentation, finish with a single final line that starts with "Sources: " followed by the full URL(s), separated by "; ". If you genuinely have no sources, omit that line entirely.`;
 
-const BULLETED_INSTRUCTIONS = `Write the answer in PLAIN TEXT only. Do NOT use Markdown of any kind: no "#" headings, no "**" or "*" for bold/italic, and no section titles like "Summary", "Details", "Example" or "References".
+const BULLETED_INSTRUCTIONS = `Write the answer in PLAIN TEXT only. Do NOT use Markdown of any kind: no "#" headings, no "**" or "*" for bold/italic, and no section titles or labels like "High-Level Answer", "Summary", "Details", "How Dynamic Yield Does This", "Example", "Practical Example" or "References". Never print those labels.
 
-Start with a short intro of 1 to 2 sentences that answers the question directly and positively. Then add up to 5 bullet points (fewer is better), each on its own line starting with "• " (a real bullet character, not a dash or asterisk). CRITICAL: each bullet must be ONE short, self-contained sentence of at most ~25 words — concise but complete. Never write a long run-on bullet with many commas; if an idea is big, keep only its essence. After the bullets, add one short line with a quick concrete example starting with "Example: ".
+Structure the answer exactly like this, with blank lines between the blocks:
+
+First, one or two sentences that directly answer the question at a high level (a clear yes/no plus the essence).
+
+Then a short lead-in sentence followed by a bullet list that covers ALL the relevant points needed to fully answer — include as many bullets as necessary, do not artificially limit them. Each bullet goes on its own line starting with "• " (a real bullet character, not a dash or asterisk) and is a complete, specific point (a full clause or sentence). Be thorough and concrete.
+
+Then one short paragraph with a practical, real-world example (plain prose, NO label before it).
 
 If you have supporting documentation, finish with a single final line that starts with "Sources: " followed by the full URL(s), separated by "; ". If you genuinely have no sources, omit that line entirely.`;
 
@@ -91,13 +97,15 @@ export function plainifyAnswer(text: string): string {
   t = t.replace(/(^|[\s(])\*([^*\n]+?)\*(?=[\s).,;:!?]|$)/g, "$1$2");
 
   const dropLabel =
-    /^(summary|details|example|examples|references|sources?|fuentes?)\s*:?\s*$/i;
+    /^(high[-\s]?level answer|how dynamic yield does this(,?\s*high[-\s]?level answer)?|practical example|summary|details?|overview|example|examples|references|sources?|fuentes?)\s*:?\s*$/i;
   const lines = t.split(/\r?\n/).map((line) => {
     const h = line.match(/^\s{0,3}#{1,6}\s*(.*)$/);
     if (h) {
       const label = h[1].trim();
       return dropLabel.test(label) ? null : label; // rótulo solo -> fuera
     }
+    // Rótulo de sección en texto plano (sin #) en su propia línea -> fuera.
+    if (dropLabel.test(line.trim())) return null;
     // Viñetas Markdown (-, *, +) -> "• ".
     return line.replace(/^(\s{0,3})[-*+]\s+/, "$1• ");
   });
@@ -117,31 +125,40 @@ export function plainifyAnswer(text: string): string {
  * bulleted, SIEMPRE recibe viñetas, sin depender de si el LLM cumplió.
  */
 export function enforceBullets(text: string): string {
-  const t = (text ?? "").trim();
-  if (!t) return t;
-  const rawLines = t.split(/\r?\n/);
-  // ¿Ya hay viñetas? Entonces el agente cumplió: no tocamos nada.
-  if (rawLines.some((l) => /^\s*•\s+/.test(l))) return t;
+  const raw = (text ?? "").trim();
+  if (!raw) return raw;
 
-  // Separamos una posible sección final de fuentes (esté en su propia línea o
-  // inline), ANTES de trocear en frases, para que las URLs no se partan.
+  // 1. Separamos una posible sección final de fuentes (en su propia línea o
+  //    inline), ANTES de normalizar, para que las URLs no se toquen.
   let sources = "";
-  let work = t;
+  let work = raw;
   const sm = work.match(/(?:^|\n|\s)(?:sources?|fuentes?)\s*:\s*([\s\S]+?)\s*$/i);
   if (sm && sm.index !== undefined) {
     sources = "Sources: " + sm[1].replace(/\s+/g, " ").trim();
     work = work.slice(0, sm.index).trim();
   }
 
-  const prose = work.replace(/\s+/g, " ").trim();
-  if (!prose) return sources || t;
+  // 2. Normalizamos las viñetas SIN reordenar: guiones/asteriscos Markdown a
+  //    "• ", y cada "•" (inline o duplicado) pasa a su propia línea. El resto
+  //    del texto (intro, párrafo de ejemplo) mantiene su posición y sus saltos.
+  const out = work
+    .replace(/\r/g, "")
+    .replace(/^[\t ]*[-*+]\s+/gm, "• ") // viñetas Markdown al inicio de línea
+    .replace(/\s*•[\s•]*/g, "\n• ") // cada • -> nueva línea (colapsa dobles)
+    .replace(/^\n+/, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
-  // Partimos en frases (respetando el punto final). El lookahead exige espacio
-  // o fin tras el signo, así una URL como "dy.dev" no se corta.
+  const hasBullets = /(^|\n)•\s/.test(out);
+  if (hasBullets) return sources ? `${out}\n${sources}` : out;
+
+  // 3. Sin viñetas: el agente devolvió prosa -> la troceamos en frases (una por
+  //    bullet), dejando la primera frase como intro.
+  const prose = work.replace(/\s+/g, " ").trim();
+  if (!prose) return sources || raw;
   const sentences =
     prose.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g)?.map((s) => s.trim()).filter(Boolean) ??
     [prose];
-
   const parts: string[] = [];
   if (sentences.length <= 1) {
     parts.push("• " + sentences[0]);

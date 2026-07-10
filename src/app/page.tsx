@@ -21,6 +21,8 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [copilotQuestion, setCopilotQuestion] = useState<string | null>(null);
   const [mode, setMode] = useState<"simple" | "detailed" | "bulleted">("detailed");
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const loadThreads = useCallback(async () => {
@@ -107,7 +109,7 @@ export default function Home() {
     setSending(false);
   }
 
-  async function patchThread(data: Partial<{ status: string; tags: string[] }>) {
+  async function patchThread(data: Partial<{ status: string; tags: string[]; title: string }>) {
     if (!activeId) return;
     await fetch("/api/threads", {
       method: "PATCH",
@@ -116,6 +118,18 @@ export default function Home() {
     });
     await loadThreads();
     setDetail((d) => (d ? { ...d, ...data } as ThreadDetail : d));
+  }
+
+  function startEditTitle() {
+    if (!detail) return;
+    setTitleDraft(detail.title);
+    setEditingTitle(true);
+  }
+
+  async function saveTitle() {
+    const next = titleDraft.trim();
+    setEditingTitle(false);
+    if (next && next !== detail?.title) await patchThread({ title: next });
   }
 
   return (
@@ -151,8 +165,35 @@ export default function Home() {
         ) : (
           <>
             <header className="flex items-center justify-between gap-4 border-b border-gray-200 bg-white px-6 py-3">
-              <h2 className="truncate font-medium">{detail.title}</h2>
-              <div className="flex items-center gap-3">
+              {editingTitle ? (
+                <input
+                  autoFocus
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onBlur={saveTitle}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      saveTitle();
+                    } else if (e.key === "Escape") {
+                      setEditingTitle(false);
+                    }
+                  }}
+                  className="min-w-0 flex-1 rounded-lg border border-brand px-2 py-1 font-medium focus:outline-none"
+                />
+              ) : (
+                <button
+                  onClick={startEditTitle}
+                  title="Click to rename"
+                  className="group flex min-w-0 items-center gap-2 text-left"
+                >
+                  <h2 className="truncate font-medium">{detail.title}</h2>
+                  <span className="shrink-0 text-gray-300 opacity-0 transition group-hover:opacity-100">
+                    ✎
+                  </span>
+                </button>
+              )}
+              <div className="flex shrink-0 items-center gap-3">
                 <select
                   value={detail.status}
                   onChange={(e) => patchThread({ status: e.target.value })}
