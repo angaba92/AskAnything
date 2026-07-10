@@ -5,15 +5,27 @@ import { nextChatSection } from "@/lib/sections";
 
 export const dynamic = "force-dynamic";
 
+/** Extrae el usuario del header Basic Auth (el login del middleware). */
+function authUser(req: Request): string | null {
+  const header = req.headers.get("authorization");
+  if (!header?.startsWith("Basic ")) return null;
+  try {
+    const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
+    const idx = decoded.indexOf(":");
+    const user = (idx > 0 ? decoded.slice(0, idx) : decoded).trim();
+    return user || null;
+  } catch {
+    return null;
+  }
+}
+
 /** POST /api/threads/new -> crea un thread en DY y lo guarda localmente.
  * Usa una sección del pool de CHAT (rotando) para que cada conversación nueva
- * caiga en un thread distinto e independiente del batch y de otros usuarios. */
+ * caiga en un thread distinto e independiente del batch y de otros usuarios.
+ * El owner se toma del usuario logueado (Basic Auth). */
 export async function POST(req: Request) {
   try {
-    const owner = await req
-      .json()
-      .then((b) => (typeof b?.owner === "string" ? b.owner.trim() || null : null))
-      .catch(() => null);
+    const owner = authUser(req);
     const section = await nextChatSection();
     const dy = await createThread(section);
     const thread = await prisma.thread.upsert({

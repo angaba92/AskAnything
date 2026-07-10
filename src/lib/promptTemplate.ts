@@ -25,7 +25,7 @@ If you have supporting documentation, finish with a single final line that start
 
 const BULLETED_INSTRUCTIONS = `Write the answer in PLAIN TEXT only. Do NOT use Markdown of any kind: no "#" headings, no "**" or "*" for bold/italic, and no section titles like "Summary", "Details", "Example" or "References".
 
-Begin with a short intro that answers the question directly and positively — as long as it needs to be to actually address the question. Then add up to 5 bullet points (fewer is fine), each on its own line starting with "• " (a real bullet character, not a dash or asterisk). Each bullet must be concise but complete — one clear idea, not too long, no sub-bullets. After the bullets, add one line with a quick concrete example starting with "Example: ".
+Start with a short intro of 1 to 2 sentences that answers the question directly and positively. Then add up to 5 bullet points (fewer is better), each on its own line starting with "• " (a real bullet character, not a dash or asterisk). CRITICAL: each bullet must be ONE short, self-contained sentence of at most ~25 words — concise but complete. Never write a long run-on bullet with many commas; if an idea is big, keep only its essence. After the bullets, add one short line with a quick concrete example starting with "Example: ".
 
 If you have supporting documentation, finish with a single final line that starts with "Sources: " followed by the full URL(s), separated by "; ". If you genuinely have no sources, omit that line entirely.`;
 

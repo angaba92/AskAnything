@@ -1,9 +1,19 @@
 import { prisma } from "./db";
 import type { DyMessage } from "./dyClient";
-import { stripTemplate } from "./promptTemplate";
+import { stripTemplate, plainifyAnswer, enforceBullets } from "./promptTemplate";
 
-/** Upsert de mensajes de DY en la BD local, asociados a un thread. */
-export async function persistMessages(threadId: string, messages: DyMessage[]) {
+/** Upsert de mensajes de DY en la BD local, asociados a un thread.
+ *
+ * `bulletedAiIds` (opcional): ids de mensajes del agente a los que además de
+ * limpiar el markdown hay que forzarles el formato de viñetas. Solo se aplica a
+ * esos ids concretos (los recién generados en modo "bulleted"), nunca a todo el
+ * historial, para no reescribir respuestas antiguas en otro estilo. */
+export async function persistMessages(
+  threadId: string,
+  messages: DyMessage[],
+  opts: { bulletedAiIds?: string[] } = {}
+) {
+  const bulleted = new Set(opts.bulletedAiIds ?? []);
   for (const m of messages) {
     const meta = {
       agentMetadata: m.agentMetadata,
@@ -11,8 +21,16 @@ export async function persistMessages(threadId: string, messages: DyMessage[]) {
       interactionId: m.interactionId,
     };
     // El mensaje humano que DY persiste incluye la plantilla de formato; la
-    // quitamos para mostrar/guardar la pregunta limpia.
-    const text = m.role === "human" ? stripTemplate(m.text) : m.text;
+    // quitamos para mostrar/guardar la pregunta limpia. Las respuestas del
+    // agente se pasan a texto plano (sin markdown) y, si son del envío actual
+    // en modo viñetas, se les fuerza el formato de bullets.
+    let text: string;
+    if (m.role === "human") {
+      text = stripTemplate(m.text);
+    } else {
+      text = plainifyAnswer(m.text);
+      if (bulleted.has(m.id)) text = enforceBullets(text);
+    }
     await prisma.message.upsert({
       where: { id: m.id },
       create: {

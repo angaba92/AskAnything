@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { sendMessageWithRetry, getThread, DyAuthError } from "@/lib/dyClient";
 import { persistMessages } from "@/lib/persist";
+import { resolveMode } from "@/lib/promptTemplate";
 
 export const dynamic = "force-dynamic";
 
@@ -44,11 +45,17 @@ export async function POST(req: NextRequest) {
       mode,
       sectionId: existing?.section ?? undefined,
     });
-    await persistMessages(threadId, dy.messages);
+    // En modo viñetas, forzamos el formato solo sobre las respuestas del agente
+    // recién generadas (no sobre el historial que se reconcilia después).
+    const bulletedAiIds =
+      resolveMode({ mode, structured }) === "bulleted"
+        ? dy.messages.filter((m) => m.role !== "human").map((m) => m.id)
+        : [];
+    await persistMessages(threadId, dy.messages, { bulletedAiIds });
     // ...y reconciliamos con el historial autoritativo (incluye el mensaje
     // humano con su id/seqId reales, evitando duplicados).
     const full = await getThread(threadId);
-    await persistMessages(threadId, full.messages);
+    await persistMessages(threadId, full.messages, { bulletedAiIds });
     return NextResponse.json({ ok: true, messages: dy.messages });
   } catch (err) {
     if (err instanceof DyAuthError) {
