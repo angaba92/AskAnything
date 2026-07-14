@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createThread, sendMessageWithRetry, DyAuthError } from "@/lib/dyClient";
 import { plainifyAnswer, enforceBullets, resolveMode } from "@/lib/promptTemplate";
+import { answerViaMcp } from "@/lib/knowledge";
+import { McpError } from "@/lib/mcpClient";
 
 export const dynamic = "force-dynamic";
 
@@ -14,17 +16,39 @@ export const dynamic = "force-dynamic";
  * plantilla de dyClient). structured=false/omitido → respuesta simple y concisa.
  */
 export async function POST(req: NextRequest) {
-  const { question, context, structured, mode, threadId, sectionId } = (await req.json()) as {
+  const { question, context, structured, mode, threadId, sectionId, backend } = (await req.json()) as {
     question: string;
     context?: string;
     structured?: boolean;
     mode?: string;
     threadId?: string;
     sectionId?: string;
+    backend?: string;
   };
 
   if (!question?.trim()) {
     return NextResponse.json({ error: "question is required" }, { status: 400 });
+  }
+
+  // Backend "mcp" (get_dy_knowledge): stateless, sin secciones ni hilos.
+  if (backend === "mcp") {
+    try {
+      const { answer, sourcesText } = await answerViaMcp(question, {
+        mode,
+        structured,
+        context,
+      });
+      return NextResponse.json({
+        ok: true,
+        answer,
+        expert: "knowledge_base",
+        tools: sourcesText || "get_dy_knowledge",
+        threadId: "",
+      });
+    } catch (err) {
+      const status = err instanceof McpError ? err.status ?? 502 : 500;
+      return NextResponse.json({ error: (err as Error).message }, { status });
+    }
   }
 
   const isSimple = mode ? mode === "simple" : !structured;

@@ -21,6 +21,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [copilotQuestion, setCopilotQuestion] = useState<string | null>(null);
   const [mode, setMode] = useState<"simple" | "detailed" | "bulleted" | "loopio">("detailed");
+  const [backend, setBackend] = useState<"agent" | "mcp">("agent");
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -96,7 +97,7 @@ export default function Home() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ threadId: activeId, message: text, mode }),
+      body: JSON.stringify({ threadId: activeId, message: text, mode, backend }),
     });
 
     if (res.ok) {
@@ -280,6 +281,33 @@ export default function Home() {
                     : mode === "loopio"
                     ? "Verdict · themed sections · example · source (RFP style)"
                     : "Short, direct answer"}
+                </span>
+                <span className="mx-1 h-4 w-px bg-gray-200" />
+                <span className="text-xs text-gray-400">Backend:</span>
+                <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setBackend("agent")}
+                    className={`px-2.5 py-1 ${
+                      backend === "agent" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                    }`}
+                  >
+                    Agent
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBackend("mcp")}
+                    className={`border-l border-gray-300 px-2.5 py-1 ${
+                      backend === "mcp" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                    }`}
+                  >
+                    Knowledge (MCP)
+                  </button>
+                </div>
+                <span className="text-[11px] text-gray-400">
+                  {backend === "mcp"
+                    ? "Stateless KB · cited sources · no thread limits"
+                    : "Experience OS agent (threaded)"}
                 </span>
               </div>
               <div className="flex items-end gap-2">

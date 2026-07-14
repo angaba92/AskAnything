@@ -21,11 +21,13 @@ export interface BatchRow {
 }
 
 export type BatchMode = "simple" | "detailed" | "bulleted" | "loopio";
+export type BatchBackend = "agent" | "mcp";
 
 interface BatchContextValue {
   rows: BatchRow[];
   context: string;
   mode: BatchMode;
+  backend: BatchBackend;
   fileName: string;
   running: boolean;
   stopping: boolean;
@@ -40,6 +42,7 @@ interface BatchContextValue {
   setStartRow: (v: number) => void;
   setContext: (v: string) => void;
   setMode: (v: BatchMode) => void;
+  setBackend: (v: BatchBackend) => void;
   loadFile: (file: File) => void;
   loadFromUrl: (url: string) => Promise<void>;
   setQuestionCol: (c: string) => void;
@@ -69,6 +72,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [rows, setRows] = useState<BatchRow[]>([]);
   const [context, setContext] = useState("");
   const [mode, setMode] = useState<BatchMode>("detailed");
+  const [backend, setBackend] = useState<BatchBackend>("agent");
   const [fileName, setFileName] = useState("");
   const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -94,6 +98,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const rowsRef = useRef<BatchRow[]>([]);
   const contextRef = useRef("");
   const modeRef = useRef<BatchMode>("detailed");
+  const backendRef = useRef<BatchBackend>("agent");
   const rawRef = useRef<Record<string, unknown>[]>([]);
   const answerColRef = useRef("");
   const startRowRef = useRef(1);
@@ -101,6 +106,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   rowsRef.current = rows;
   contextRef.current = context;
   modeRef.current = mode;
+  backendRef.current = backend;
   answerColRef.current = answerCol;
   startRowRef.current = startRow;
 
@@ -282,6 +288,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
             question: rowsRef.current[i].question,
             context: contextRef.current,
             mode: modeRef.current,
+            backend: backendRef.current,
             sectionId: section,
             threadId: sectionThreads.current[section] ?? undefined,
           }),
@@ -470,6 +477,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     rows,
     context,
     mode,
+    backend,
     fileName,
     running,
     stopping,
@@ -484,6 +492,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     setStartRow,
     setContext,
     setMode,
+    setBackend,
     loadFile,
     loadFromUrl,
     setQuestionCol,

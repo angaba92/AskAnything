@@ -69,20 +69,33 @@ export function resolveMode(input: {
   return input.structured ? "detailed" : "simple";
 }
 
+/** Devuelve solo el bloque de instrucciones de un modo (sin marcadores). */
+export function instructionsFor(mode: AnswerMode): string | null {
+  if (mode === "simple") return null;
+  return mode === "bulleted"
+    ? BULLETED_INSTRUCTIONS
+    : mode === "loopio"
+    ? LOOPIO_INSTRUCTIONS
+    : DETAILED_INSTRUCTIONS;
+}
+
 /** Envuelve la pregunta con las instrucciones de formato del modo elegido.
  * Las instrucciones van AL FINAL (justo tras la pregunta): por recencia, el
  * agente les da mucho más peso que al historial del hilo, que es lo que hacía
  * que a veces se saltara el formato al rotar entre secciones con historiales
  * distintos. */
 export function wrapWithTemplate(question: string, mode: AnswerMode): string {
-  if (mode === "simple") return question.trim();
-  const instructions =
-    mode === "bulleted"
-      ? BULLETED_INSTRUCTIONS
-      : mode === "loopio"
-      ? LOOPIO_INSTRUCTIONS
-      : DETAILED_INSTRUCTIONS;
+  const instructions = instructionsFor(mode);
+  if (!instructions) return question.trim();
   return `${question.trim()}\n\n${FORMAT_START}\n${instructions}\n${FORMAT_END}`;
+}
+
+/** Como wrapWithTemplate pero SIN los marcadores [ANSWER FORMAT] …, para el
+ * backend MCP (los corchetes/etiquetas a veces hacen fallar la tool). */
+export function wrapForKnowledge(question: string, mode: AnswerMode): string {
+  const instructions = instructionsFor(mode);
+  if (!instructions) return question.trim();
+  return `${question.trim()}\n\n${instructions}`;
 }
 
 /**

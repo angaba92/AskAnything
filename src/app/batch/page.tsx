@@ -9,6 +9,7 @@ export default function BatchPage() {
     rows,
     context,
     mode,
+    backend,
     running,
     stopping,
     progress,
@@ -22,6 +23,7 @@ export default function BatchPage() {
     setStartRow,
     setContext,
     setMode,
+    setBackend,
     loadFile,
     loadFromUrl,
     setQuestionCol,
@@ -133,6 +135,37 @@ export default function BatchPage() {
               : mode === "loopio"
               ? "RFP style: verdict · themed sections · example · source"
               : "Short, direct answer (best for spreadsheet cells)"}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">Backend:</span>
+          <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
+            <button
+              type="button"
+              onClick={() => setBackend("agent")}
+              disabled={running}
+              className={`px-2.5 py-1 disabled:opacity-60 ${
+                backend === "agent" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              Agent
+            </button>
+            <button
+              type="button"
+              onClick={() => setBackend("mcp")}
+              disabled={running}
+              className={`border-l border-gray-300 px-2.5 py-1 disabled:opacity-60 ${
+                backend === "mcp" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              Knowledge (MCP)
+            </button>
+          </div>
+          <span className="text-[11px] text-gray-400">
+            {backend === "mcp"
+              ? "Stateless knowledge base · cited sources · no section limits or thread collisions (recommended for large batches)"
+              : "Experience OS agent · rotates DY sections/threads"}
           </span>
         </div>
 

@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { sendMessageWithRetry, getThread, DyAuthError } from "@/lib/dyClient";
+import { sendMessageWithRetry, getThread, DyAuthError, type DyMessage } from "@/lib/dyClient";
 import { persistMessages } from "@/lib/persist";
 import { resolveMode } from "@/lib/promptTemplate";
+import { answerViaMcp } from "@/lib/knowledge";
+import { McpError } from "@/lib/mcpClient";
 
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/chat  { threadId, message }
- * Persiste el mensaje humano, lo envía a DY, persiste la respuesta y la devuelve.
+ * POST /api/chat  { threadId, message, mode?, backend? }
+ * Persiste el mensaje humano, lo envía al backend elegido (agente DY o MCP),
+ * persiste la respuesta y la devuelve.
  */
 export async function POST(req: NextRequest) {
-  const { threadId, message, structured, mode } = (await req.json()) as {
+  const { threadId, message, structured, mode, backend } = (await req.json()) as {
     threadId: string;
     message: string;
     structured?: boolean;
     mode?: string;
+    backend?: string;
   };
 
   if (!threadId || !message?.trim()) {
@@ -35,6 +39,37 @@ export async function POST(req: NextRequest) {
         ? { title: message.slice(0, 60) }
         : {},
   });
+
+  // Backend "mcp" (get_dy_knowledge): stateless. No usamos el hilo de DY; sólo
+  // persistimos localmente el par pregunta/respuesta con seqIds correlativos.
+  if (backend === "mcp") {
+    try {
+      const { answer } = await answerViaMcp(message, { mode, structured });
+      const agg = await prisma.message.aggregate({
+        where: { threadId },
+        _max: { seqId: true },
+      });
+      const base = (agg._max.seqId ?? 0) + 1;
+      const stamp = Date.now();
+      const msgs: DyMessage[] = [
+        { id: `mcp-h-${stamp}`, role: "human", text: message, seqId: base },
+        {
+          id: `mcp-a-${stamp}`,
+          role: "ai",
+          text: answer,
+          seqId: base + 1,
+          agentMetadata: { toolsUsed: ["get_dy_knowledge"], expertSelected: "knowledge_base" },
+        },
+      ];
+      // La respuesta ya viene formateada; persistMessages sólo la pasa a texto
+      // plano (idempotente). No forzamos bullets de nuevo (ya se aplicaron).
+      await persistMessages(threadId, msgs);
+      return NextResponse.json({ ok: true, messages: msgs });
+    } catch (err) {
+      const status = err instanceof McpError ? err.status ?? 502 : 500;
+      return NextResponse.json({ error: (err as Error).message }, { status });
+    }
+  }
 
   try {
     // Enviamos a DY con el estilo elegido (simple / detailed / bulleted) y con
