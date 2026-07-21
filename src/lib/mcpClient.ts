@@ -36,6 +36,17 @@ export class McpError extends Error {
   }
 }
 
+/** Mensaje claro cuando el host MCP no es alcanzable (p. ej. desde Vercel). */
+export const MCP_UNREACHABLE_MSG =
+  "The Knowledge (MCP) backend is only reachable from the Mastercard corporate network, so it can't be used on the hosted (Vercel) app. Run AskAnything locally (npm run dev) on your corporate machine to use it, or switch to the Agent backend.";
+
+/** ¿Estamos en un entorno de nube pública (Vercel) que NO puede alcanzar el
+ * host interno de Mastercard? Si es así, cortamos de inmediato con un mensaje
+ * claro en vez de esperar a que el fetch falle por timeout. */
+export function isMcpReachableEnv(): boolean {
+  return !process.env.VERCEL;
+}
+
 let rpcId = 1;
 
 /** Parsea una respuesta MCP: SSE (`data: {...}`) o JSON plano. */
@@ -72,6 +83,10 @@ export async function mcpCallTool(
   opts: { timeoutMs?: number; retries?: number } = {}
 ): Promise<McpToolResult> {
   const retries = opts.retries ?? 2;
+  // El tool es lento (~25s) y rate-limited: tras un par de llamadas devuelve
+  // "Failed to execute tool". Reintentamos con esperas para darle margen de
+  // recuperación, pero acotadas para no colgar la respuesta demasiado.
+  const backoff = [8000, 20000];
   let lastResult: McpToolResult | null = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const result = await mcpCallToolOnce(name, args, opts);
@@ -81,7 +96,8 @@ export async function mcpCallTool(
     }
     lastResult = result;
     if (attempt < retries) {
-      const wait = 1500 * (attempt + 1) * (0.8 + Math.random() * 0.4);
+      const base = backoff[Math.min(attempt, backoff.length - 1)];
+      const wait = base * (0.8 + Math.random() * 0.4);
       await new Promise((r) => setTimeout(r, wait));
     }
   }
@@ -129,7 +145,8 @@ async function mcpCallToolOnce(
     if (e.name === "AbortError") {
       throw new McpError("MCP request timed out.", 504);
     }
-    throw new McpError(`MCP request failed: ${e.message}`);
+    // Fallo de red (host inalcanzable) → mensaje claro y accionable.
+    throw new McpError(MCP_UNREACHABLE_MSG, 503);
   } finally {
     clearTimeout(timer);
   }
