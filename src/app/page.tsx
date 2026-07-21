@@ -10,6 +10,11 @@ import {
   type ThreadDetail,
   type ThreadListItem,
 } from "@/lib/types";
+import { ANSWER_MODES, MODE_LABELS, MODE_HINTS, type AnswerMode } from "@/lib/promptMapping";
+
+// MIGRACIÓN: proveedores disponibles. "ka" (DY Knowledge Assistant) es el nuevo
+// por defecto y recomendado; "agent" y "mcp" quedan como backup ("DO NOT USE").
+type Backend = "ka" | "agent" | "mcp";
 
 export default function Home() {
   const [threads, setThreads] = useState<ThreadListItem[]>([]);
@@ -20,8 +25,8 @@ export default function Home() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copilotQuestion, setCopilotQuestion] = useState<string | null>(null);
-  const [mode, setMode] = useState<"simple" | "detailed" | "bulleted" | "loopio">("detailed");
-  const [backend, setBackend] = useState<"agent" | "mcp">("agent");
+  const [mode, setMode] = useState<AnswerMode>("detailed");
+  const [backend, setBackend] = useState<Backend>("ka");
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -160,8 +165,26 @@ export default function Home() {
         )}
 
         {!detail ? (
-          <div className="flex flex-1 items-center justify-center text-gray-400">
-            Select or create a conversation to start.
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand/10 text-2xl">
+              💬
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-gray-800">
+                DY Knowledge Assistant
+              </h2>
+              <p className="mt-1 max-w-md text-sm text-gray-400">
+                Ask anything about Dynamic Yield. Create or select a conversation
+                on the left to start — answers are grounded in DY documentation
+                and approved knowledge.
+              </p>
+            </div>
+            <button
+              onClick={handleNew}
+              className="rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark"
+            >
+              + New conversation
+            </button>
           </div>
         ) : (
           <>
@@ -233,81 +256,71 @@ export default function Home() {
             </div>
 
             <footer className="border-t border-gray-200 bg-white p-4">
-              <div className="mb-2 flex items-center gap-2">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
                 <span className="text-xs text-gray-400">Answer style:</span>
+                {/* Estilos mapeados desde la configuración central (promptMapping). */}
                 <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setMode("detailed")}
-                    className={`px-2.5 py-1 ${
-                      mode === "detailed" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-                    }`}
-                  >
-                    Detailed
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMode("bulleted")}
-                    className={`border-l border-gray-300 px-2.5 py-1 ${
-                      mode === "bulleted" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-                    }`}
-                  >
-                    Detailed (bullets)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMode("loopio")}
-                    className={`border-l border-gray-300 px-2.5 py-1 ${
-                      mode === "loopio" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-                    }`}
-                  >
-                    Loopio (RFP)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMode("simple")}
-                    className={`border-l border-gray-300 px-2.5 py-1 ${
-                      mode === "simple" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-                    }`}
-                  >
-                    Simple
-                  </button>
+                  {ANSWER_MODES.map((m, i) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setMode(m)}
+                      className={`${i > 0 ? "border-l border-gray-300 " : ""}px-2.5 py-1 ${
+                        mode === m
+                          ? "bg-brand text-white"
+                          : "bg-white text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {MODE_LABELS[m]}
+                    </button>
+                  ))}
                 </div>
-                <span className="text-[11px] text-gray-400">
-                  {mode === "detailed"
-                    ? "Summary · Details · Example · References"
-                    : mode === "bulleted"
-                    ? "Summary · bullet Details · Example · References"
-                    : mode === "loopio"
-                    ? "Verdict · themed sections · example · source (RFP style)"
-                    : "Short, direct answer"}
-                </span>
+                <span className="text-[11px] text-gray-400">{MODE_HINTS[mode]}</span>
                 <span className="mx-1 h-4 w-px bg-gray-200" />
                 <span className="text-xs text-gray-400">Backend:</span>
+                {/* MIGRACIÓN: KA es el nuevo por defecto (recomendado). Agent y MCP
+                    se mantienen disponibles pero marcados "DO NOT USE" (backup). */}
                 <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setBackend("ka")}
+                    className={`px-2.5 py-1 ${
+                      backend === "ka" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                    }`}
+                  >
+                    Knowledge Assistant
+                  </button>
                   <button
                     type="button"
                     onClick={() => setBackend("agent")}
-                    className={`px-2.5 py-1 ${
-                      backend === "agent" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                    title="Deprecated — backup only. Do not use."
+                    className={`border-l border-gray-300 px-2.5 py-1 ${
+                      backend === "agent"
+                        ? "bg-red-600 text-white"
+                        : "bg-white text-gray-400 line-through hover:bg-gray-50"
                     }`}
                   >
-                    Agent
+                    Agent · DO NOT USE
                   </button>
                   <button
                     type="button"
                     onClick={() => setBackend("mcp")}
+                    title="Deprecated — backup only. Do not use."
                     className={`border-l border-gray-300 px-2.5 py-1 ${
-                      backend === "mcp" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                      backend === "mcp"
+                        ? "bg-red-600 text-white"
+                        : "bg-white text-gray-400 line-through hover:bg-gray-50"
                     }`}
                   >
-                    Knowledge (MCP)
+                    MCP · DO NOT USE
                   </button>
                 </div>
                 <span className="text-[11px] text-gray-400">
-                  {backend === "mcp"
-                    ? "Stateless KB · cited sources · no thread limits"
-                    : "Experience OS agent (threaded)"}
+                  {backend === "ka"
+                    ? "DY Knowledge Assistant — grounded, cited answers (recommended)"
+                    : backend === "mcp"
+                    ? "Backup only · corporate network — run locally"
+                    : "Backup only · Experience OS agent (threaded)"}
                 </span>
               </div>
               <div className="flex items-end gap-2">

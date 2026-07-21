@@ -3,8 +3,9 @@ import { prisma } from "@/lib/db";
 import { sendMessageWithRetry, getThread, DyAuthError, type DyMessage } from "@/lib/dyClient";
 import { persistMessages } from "@/lib/persist";
 import { resolveMode } from "@/lib/promptTemplate";
-import { answerViaMcp } from "@/lib/knowledge";
-import { McpError } from "@/lib/mcpClient";
+import { generateStateless, resolveProvider, isStateless } from "@/lib/providers";
+import { KaError } from "@/lib/kaClient";
+import { McpError, isMcpReachableEnv, MCP_UNREACHABLE_MSG } from "@/lib/mcpClient";
 
 export const dynamic = "force-dynamic";
 
@@ -40,25 +41,32 @@ export async function POST(req: NextRequest) {
         : {},
   });
 
-  // Backend "mcp" (get_dy_knowledge): stateless. No usamos el hilo de DY; sólo
-  // persistimos localmente el par pregunta/respuesta con seqIds correlativos.
-  if (backend === "mcp") {
+  // MIGRACIÓN: proveedor por defecto "ka" (DY Knowledge Assistant). Los
+  // proveedores stateless (KA por defecto; MCP como backup "DO NOT USE") NO usan
+  // el hilo de DY: persistimos localmente el par pregunta/respuesta con seqIds
+  // correlativos, de forma que el historial del chat se mantiene igual que antes.
+  const provider = resolveProvider(backend);
+  if (isStateless(provider)) {
+    if (provider === "mcp" && !isMcpReachableEnv()) {
+      return NextResponse.json({ error: MCP_UNREACHABLE_MSG }, { status: 503 });
+    }
     try {
-      const { answer } = await answerViaMcp(message, { mode, structured });
+      const r = await generateStateless(provider, { question: message, mode, structured });
       const agg = await prisma.message.aggregate({
         where: { threadId },
         _max: { seqId: true },
       });
       const base = (agg._max.seqId ?? 0) + 1;
       const stamp = Date.now();
+      const tool = provider === "ka" ? "knowledge_assistant" : "get_dy_knowledge";
       const msgs: DyMessage[] = [
-        { id: `mcp-h-${stamp}`, role: "human", text: message, seqId: base },
+        { id: `${provider}-h-${stamp}`, role: "human", text: message, seqId: base },
         {
-          id: `mcp-a-${stamp}`,
+          id: `${provider}-a-${stamp}`,
           role: "ai",
-          text: answer,
+          text: r.answer,
           seqId: base + 1,
-          agentMetadata: { toolsUsed: ["get_dy_knowledge"], expertSelected: "knowledge_base" },
+          agentMetadata: { toolsUsed: [tool], expertSelected: r.expert },
         },
       ];
       // La respuesta ya viene formateada; persistMessages sólo la pasa a texto
@@ -66,7 +74,8 @@ export async function POST(req: NextRequest) {
       await persistMessages(threadId, msgs);
       return NextResponse.json({ ok: true, messages: msgs });
     } catch (err) {
-      const status = err instanceof McpError ? err.status ?? 502 : 500;
+      const status =
+        err instanceof KaError || err instanceof McpError ? err.status ?? 502 : 500;
       return NextResponse.json({ error: (err as Error).message }, { status });
     }
   }

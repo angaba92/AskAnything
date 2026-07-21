@@ -21,7 +21,9 @@ export interface BatchRow {
 }
 
 export type BatchMode = "simple" | "detailed" | "bulleted" | "loopio";
-export type BatchBackend = "agent" | "mcp";
+// MIGRACIÓN: "ka" (DY Knowledge Assistant) es el nuevo backend por defecto.
+// "agent" y "mcp" permanecen como backup ("DO NOT USE").
+export type BatchBackend = "ka" | "agent" | "mcp";
 
 interface BatchContextValue {
   rows: BatchRow[];
@@ -72,7 +74,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [rows, setRows] = useState<BatchRow[]>([]);
   const [context, setContext] = useState("");
   const [mode, setMode] = useState<BatchMode>("detailed");
-  const [backend, setBackend] = useState<BatchBackend>("agent");
+  const [backend, setBackend] = useState<BatchBackend>("ka");
   const [fileName, setFileName] = useState("");
   const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -98,7 +100,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const rowsRef = useRef<BatchRow[]>([]);
   const contextRef = useRef("");
   const modeRef = useRef<BatchMode>("detailed");
-  const backendRef = useRef<BatchBackend>("agent");
+  const backendRef = useRef<BatchBackend>("ka");
   const rawRef = useRef<Record<string, unknown>[]>([]);
   const answerColRef = useRef("");
   const startRowRef = useRef(1);
@@ -265,7 +267,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
     // Pausa base entre filas (ms) + ralentización adaptativa: si DY empieza a
     // fallar, aumentamos la espera para no saturarlo; al ir bien, la bajamos.
-    const BASE_DELAY = 1200;
+    // KA (por defecto) y el agente son rápidos (~1-2s) → pausa corta. El backend
+    // MCP (get_dy_knowledge) es lento (~25-40s) y se rate-limita tras ~2 llamadas
+    // seguidas: le damos una pausa base mucho mayor entre filas.
+    const BASE_DELAY = backendRef.current === "mcp" ? 30000 : 1200;
     let consecutiveErrors = 0;
 
     // Procesa una fila. Devuelve "done" | "error" | "stopped".
@@ -343,6 +348,12 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           return next;
         });
         if (/sesi[oó]n|session|cookie|xsrf|caduc/i.test((err as Error).message)) {
+          setError((err as Error).message);
+          return "stopped";
+        }
+        // El backend MCP no es alcanzable (p. ej. en Vercel): no tiene sentido
+        // reintentar 150 filas; paramos y mostramos el aviso claro.
+        if (/MCP|corporate network|npm run dev/i.test((err as Error).message)) {
           setError((err as Error).message);
           return "stopped";
         }
@@ -466,7 +477,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "answers");
-    XLSX.writeFile(wb, fileName.replace(/\.xlsx?$/i, "") + "_answered.xlsx");
+    // El export siempre es .xlsx; quitamos cualquier extensión soportada de origen.
+    XLSX.writeFile(wb, fileName.replace(/\.(xlsx|xls|csv|ods)$/i, "") + "_answered.xlsx");
   }
 
   const doneCount = rows.filter(

@@ -8,7 +8,28 @@ body {
 }
 
 body {
-  @apply bg-gray-50 text-gray-900;
+  @apply text-gray-900;
+  background-color: #f6f8fb; /* KA app background */
+}
+
+/* ------------------------------------------------------------------ */
+/* KA (DY Knowledge Assistant) LIGHT palette.                          */
+/* We retrofit the reference look by overriding the hard-coded Tailwind */
+/* gray utilities globally (same technique as dark mode below). The     */
+/* `.dark` rules have higher specificity, so they still win in dark     */
+/* mode — this only recolors the light theme to match KA.               */
+/* ------------------------------------------------------------------ */
+.bg-gray-50 {
+  background-color: #f6f8fb; /* app / message area */
+}
+.bg-gray-100 {
+  background-color: #eef1f6; /* chips, code, tracks */
+}
+.border-gray-100 {
+  border-color: #e7ebf1;
+}
+.border-gray-200 {
+  border-color: #dfe3ea;
 }
 
 /* Estilos básicos para el markdown renderizado de las respuestas del agente */
@@ -87,10 +108,10 @@ body {
 
 /* Brand text needs to lift off the dark background a bit */
 .dark .text-brand-dark {
-  color: #c4b5fd; /* violet-300 */
+  color: #6ee7b7; /* emerald-300 (KA green in dark mode) */
 }
 .dark .text-brand {
-  color: #a78bfa; /* violet-400 */
+  color: #34d399; /* emerald-400 */
 }
 
 /* Hover states that assume a light surface */

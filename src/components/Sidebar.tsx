@@ -42,7 +42,7 @@ export default function Sidebar({
           href="/batch"
           className="mt-2 inline-block text-xs font-medium text-brand hover:underline"
         >
-          ⬚ Batch Excel import
+          ⬚ Bulk import (Excel / CSV)
         </Link>
         <Link
           href="/kb"

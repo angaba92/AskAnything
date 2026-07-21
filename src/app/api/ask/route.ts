@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createThread, sendMessageWithRetry, DyAuthError } from "@/lib/dyClient";
 import { plainifyAnswer, enforceBullets, resolveMode } from "@/lib/promptTemplate";
-import { answerViaMcp } from "@/lib/knowledge";
-import { McpError } from "@/lib/mcpClient";
+import { generateStateless, resolveProvider } from "@/lib/providers";
+import { KaError } from "@/lib/kaClient";
+import { McpError, isMcpReachableEnv, MCP_UNREACHABLE_MSG } from "@/lib/mcpClient";
 
 export const dynamic = "force-dynamic";
 
@@ -30,19 +31,39 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "question is required" }, { status: 400 });
   }
 
-  // Backend "mcp" (get_dy_knowledge): stateless, sin secciones ni hilos.
-  if (backend === "mcp") {
+  // MIGRACIÓN: el proveedor por defecto pasa a ser "ka" (DY Knowledge Assistant).
+  // Si el cliente no envía `backend`, resolveProvider devuelve "ka".
+  const provider = resolveProvider(backend);
+
+  // NUEVO backend por defecto: DY Knowledge Assistant (stateless, con fuentes).
+  if (provider === "ka") {
     try {
-      const { answer, sourcesText } = await answerViaMcp(question, {
-        mode,
-        structured,
-        context,
-      });
+      const r = await generateStateless("ka", { question, mode, structured, context });
       return NextResponse.json({
         ok: true,
-        answer,
-        expert: "knowledge_base",
-        tools: sourcesText || "get_dy_knowledge",
+        answer: r.answer,
+        expert: r.expert,
+        tools: r.sourcesText || "knowledge_assistant",
+        threadId: r.threadId,
+      });
+    } catch (err) {
+      const status = err instanceof KaError ? err.status ?? 502 : 500;
+      return NextResponse.json({ error: (err as Error).message }, { status });
+    }
+  }
+
+  // BACKUP ("DO NOT USE"): MCP get_dy_knowledge — stateless, solo red corporativa.
+  if (provider === "mcp") {
+    if (!isMcpReachableEnv()) {
+      return NextResponse.json({ error: MCP_UNREACHABLE_MSG }, { status: 503 });
+    }
+    try {
+      const r = await generateStateless("mcp", { question, mode, structured, context });
+      return NextResponse.json({
+        ok: true,
+        answer: r.answer,
+        expert: r.expert,
+        tools: r.sourcesText || "get_dy_knowledge",
         threadId: "",
       });
     } catch (err) {
@@ -51,6 +72,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // BACKUP ("DO NOT USE"): Experience OS Agent (threaded, con rotación de secciones).
   const isSimple = mode ? mode === "simple" : !structured;
   const concise = isSimple ? " concisely" : "";
   const preamble = context?.trim()

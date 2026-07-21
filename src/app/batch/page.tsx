@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBatch } from "@/components/BatchProvider";
+import { ANSWER_MODES, MODE_LABELS, MODE_HINTS } from "@/lib/promptMapping";
 
 export default function BatchPage() {
   const {
@@ -42,7 +43,10 @@ export default function BatchPage() {
   }
 
   function isExcel(file: File) {
-    return /\.(xlsx|xls)$/i.test(file.name);
+    // MIGRACIÓN: aceptamos también .csv/.ods (el Bulk CSV del KA). SheetJS
+    // (XLSX.read) parsea todos estos formatos de forma nativa, así que no hace
+    // falta convertir manualmente antes de mapear columnas.
+    return /\.(xlsx|xls|csv|ods)$/i.test(file.name);
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -55,7 +59,7 @@ export default function BatchPage() {
   return (
     <div className="mx-auto max-w-5xl p-6">
       <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-brand-dark">Batch Excel</h1>
+        <h1 className="text-xl font-semibold text-brand-dark">Bulk import</h1>
         <Link href="/" className="text-sm text-brand hover:underline">
           ← Back to chat
         </Link>
@@ -87,85 +91,76 @@ export default function BatchPage() {
           />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium">Answer style:</span>
+          {/* Estilos mapeados desde la configuración central (promptMapping). */}
           <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
-            <button
-              type="button"
-              onClick={() => setMode("detailed")}
-              className={`px-2.5 py-1 ${
-                mode === "detailed" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Detailed
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("bulleted")}
-              className={`border-l border-gray-300 px-2.5 py-1 ${
-                mode === "bulleted" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Detailed (bullets)
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("loopio")}
-              className={`border-l border-gray-300 px-2.5 py-1 ${
-                mode === "loopio" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Loopio (RFP)
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("simple")}
-              className={`border-l border-gray-300 px-2.5 py-1 ${
-                mode === "simple" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Simple
-            </button>
+            {ANSWER_MODES.map((m, i) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={`${i > 0 ? "border-l border-gray-300 " : ""}px-2.5 py-1 ${
+                  mode === m
+                    ? "bg-brand text-white"
+                    : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {MODE_LABELS[m]}
+              </button>
+            ))}
           </div>
-          <span className="text-[11px] text-gray-400">
-            {mode === "detailed"
-              ? "Structured: Summary · Details · Example · References"
-              : mode === "bulleted"
-              ? "Structured: Summary · bullet Details · Example · References"
-              : mode === "loopio"
-              ? "RFP style: verdict · themed sections · example · source"
-              : "Short, direct answer (best for spreadsheet cells)"}
-          </span>
+          <span className="text-[11px] text-gray-400">{MODE_HINTS[mode]}</span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium">Backend:</span>
+          {/* MIGRACIÓN: KA es el nuevo por defecto (recomendado). Agent y MCP
+              se mantienen disponibles pero marcados "DO NOT USE" (backup). */}
           <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
+            <button
+              type="button"
+              onClick={() => setBackend("ka")}
+              disabled={running}
+              className={`px-2.5 py-1 disabled:opacity-60 ${
+                backend === "ka" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              Knowledge Assistant
+            </button>
             <button
               type="button"
               onClick={() => setBackend("agent")}
               disabled={running}
-              className={`px-2.5 py-1 disabled:opacity-60 ${
-                backend === "agent" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              title="Deprecated — backup only. Do not use."
+              className={`border-l border-gray-300 px-2.5 py-1 disabled:opacity-60 ${
+                backend === "agent"
+                  ? "bg-red-600 text-white"
+                  : "bg-white text-gray-400 line-through hover:bg-gray-50"
               }`}
             >
-              Agent
+              Agent · DO NOT USE
             </button>
             <button
               type="button"
               onClick={() => setBackend("mcp")}
               disabled={running}
+              title="Deprecated — backup only. Do not use."
               className={`border-l border-gray-300 px-2.5 py-1 disabled:opacity-60 ${
-                backend === "mcp" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                backend === "mcp"
+                  ? "bg-red-600 text-white"
+                  : "bg-white text-gray-400 line-through hover:bg-gray-50"
               }`}
             >
-              Knowledge (MCP)
+              MCP · DO NOT USE
             </button>
           </div>
           <span className="text-[11px] text-gray-400">
-            {backend === "mcp"
-              ? "Stateless knowledge base · cited sources · no section limits or thread collisions (recommended for large batches)"
-              : "Experience OS agent · rotates DY sections/threads"}
+            {backend === "ka"
+              ? "DY Knowledge Assistant — grounded, cited answers (recommended, works on Vercel)"
+              : backend === "mcp"
+              ? "Backup only · corporate network — run locally, not on Vercel"
+              : "Backup only · Experience OS agent · rotates DY sections/threads"}
           </span>
         </div>
 
@@ -185,15 +180,15 @@ export default function BatchPage() {
             }`}
           >
             <p className="text-sm text-gray-600">
-              <b>Drag &amp; drop</b> your Excel here
-              <span className="text-gray-400"> — e.g. straight from your synced OneDrive folder</span>
+              <b>Drag &amp; drop</b> your spreadsheet here
+              <span className="text-gray-400"> — .xlsx, .xls, .csv or .ods, e.g. straight from your synced OneDrive folder</span>
             </p>
             <p className="text-xs text-gray-400">or</p>
             <label className="cursor-pointer rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
               Choose file
               <input
                 type="file"
-                accept=".xlsx,.xls"
+                accept=".xlsx,.xls,.csv,.ods"
                 onChange={handleFile}
                 className="hidden"
               />
@@ -201,7 +196,7 @@ export default function BatchPage() {
             <span className="text-xs text-gray-500">
               {rows.length > 0
                 ? `${rows.length} questions loaded`
-                : "Accepted: .xlsx, .xls"}
+                : "Accepted: .xlsx, .xls, .csv, .ods"}
             </span>
           </div>
 
