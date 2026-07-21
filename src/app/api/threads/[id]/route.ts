@@ -17,28 +17,34 @@ export async function GET(
   const { id } = params;
   const sync = req.nextUrl.searchParams.get("sync");
 
+  let thread = await prisma.thread.findUnique({
+    where: { id },
+    include: { messages: { orderBy: { seqId: "asc" } } },
+  });
+  if (!thread) {
+    return NextResponse.json({ error: "Thread no encontrado" }, { status: 404 });
+  }
+
   try {
-    if (sync) {
+    // MIGRACIÓN KA: section=null identifica hilos locales de KA/MCP. Aunque un
+    // cliente antiguo envíe ?sync=1, nunca intentamos consultar DY para ellos.
+    if (sync && thread.section) {
       const dy = await getThread(id);
       await persistMessages(id, dy.messages);
       const title = deriveTitle(dy.messages);
       if (title) {
         await prisma.thread.update({ where: { id }, data: { title } }).catch(() => {});
       }
+      thread = await prisma.thread.findUniqueOrThrow({
+        where: { id },
+        include: { messages: { orderBy: { seqId: "asc" } } },
+      });
     }
   } catch (err) {
     if (err instanceof DyAuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
-  }
-
-  const thread = await prisma.thread.findUnique({
-    where: { id },
-    include: { messages: { orderBy: { seqId: "asc" } } },
-  });
-  if (!thread) {
-    return NextResponse.json({ error: "Thread no encontrado" }, { status: 404 });
   }
 
   return NextResponse.json({

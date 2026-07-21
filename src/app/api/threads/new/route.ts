@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { createThread, DyAuthError } from "@/lib/dyClient";
 import { nextChatSection } from "@/lib/sections";
+import { isStateless, resolveProvider } from "@/lib/providers";
 
 export const dynamic = "force-dynamic";
 
@@ -19,13 +21,26 @@ function authUser(req: Request): string | null {
   }
 }
 
-/** POST /api/threads/new -> crea un thread en DY y lo guarda localmente.
- * Usa una sección del pool de CHAT (rotando) para que cada conversación nueva
- * caiga en un thread distinto e independiente del batch y de otros usuarios.
- * El owner se toma del usuario logueado (Basic Auth). */
+/** POST /api/threads/new { backend? }
+ * KA/MCP crean un hilo exclusivamente local. Agent Mode conserva el flujo
+ * histórico: crea un thread en DY y lo guarda localmente.
+ */
 export async function POST(req: Request) {
   try {
     const owner = authUser(req);
+    const body = (await req.json().catch(() => ({}))) as { backend?: string };
+    const provider = resolveProvider(body.backend);
+
+    // MIGRACIÓN KA: los proveedores stateless no necesitan cookie, sección ni
+    // thread remoto de Experience OS. El UUID local mantiene intactos historial,
+    // estado, tags, owner y navegación.
+    if (isStateless(provider)) {
+      const thread = await prisma.thread.create({
+        data: { id: `local-${randomUUID()}`, owner },
+      });
+      return NextResponse.json({ id: thread.id });
+    }
+
     const section = await nextChatSection();
     const dy = await createThread(section);
     const thread = await prisma.thread.upsert({

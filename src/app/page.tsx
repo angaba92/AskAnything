@@ -51,8 +51,10 @@ export default function Home() {
   }, [loadThreads]);
 
   useEffect(() => {
-    if (activeId) loadDetail(activeId, true);
-  }, [activeId, loadDetail]);
+    // MIGRACIÓN KA: KA/MCP guardan el historial localmente y no deben intentar
+    // sincronizar el thread contra Experience OS. Solo Agent Mode usa threads DY.
+    if (activeId) loadDetail(activeId, backend === "agent");
+  }, [activeId, backend, loadDetail]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -60,7 +62,11 @@ export default function Home() {
 
   async function handleNew() {
     setError(null);
-    const res = await fetch("/api/threads/new", { method: "POST" });
+    const res = await fetch("/api/threads/new", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ backend }),
+    });
     if (res.ok) {
       const { id } = await res.json();
       await loadThreads();
@@ -153,7 +159,8 @@ export default function Home() {
         {error && (
           <div className="flex items-center justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
             <span>{error}</span>
-            {/caduc|sesión|session|cookie|XSRF/i.test(error) && (
+            {backend === "agent" &&
+              /caduc|sesión|session|cookie|XSRF/i.test(error) && (
               <a
                 href="/settings"
                 className="shrink-0 rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700"
@@ -229,12 +236,14 @@ export default function Home() {
                     </option>
                   ))}
                 </select>
-                <button
-                  onClick={() => loadDetail(detail.id, true)}
-                  className="rounded-lg border border-gray-300 px-3 py-1 text-sm hover:bg-gray-50"
-                >
-                  Sync
-                </button>
+                {backend === "agent" && (
+                  <button
+                    onClick={() => loadDetail(detail.id, true)}
+                    className="rounded-lg border border-gray-300 px-3 py-1 text-sm hover:bg-gray-50"
+                  >
+                    Sync
+                  </button>
+                )}
               </div>
             </header>
 
