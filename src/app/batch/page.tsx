@@ -291,20 +291,25 @@ export default function BatchPage() {
               <span className="text-[11px] text-gray-400">of {rows.length}</span>
             </label>
           )}
-          <button
-            onClick={run}
-            disabled={running || rows.length === 0}
-            className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
-          >
-            {running ? `Running… ${progress}/${rows.length}` : "Start"}
-          </button>
-          {running && (
+          {/* Botón único que alterna Start ⇄ Stop: mientras corre, el MISMO botón
+              se vuelve rojo y dice "Stop" (antes quedaba deshabilitado como
+              "Running…" y el Stop era otro botón aparte → confuso). El progreso
+              sigue visible en la barra inferior y en el propio botón. */}
+          {running ? (
             <button
               onClick={stop}
               disabled={stopping}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-60"
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
             >
-              {stopping ? "Stopping…" : "Stop"}
+              {stopping ? "Stopping…" : `Stop · ${progress}/${rows.length}`}
+            </button>
+          ) : (
+            <button
+              onClick={run}
+              disabled={rows.length === 0}
+              className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
+            >
+              Start
             </button>
           )}
           <button

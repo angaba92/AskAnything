@@ -95,6 +95,15 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   // mal estado, el siguiente intento cae en otro distinto.
   const sectionThreads = useRef<Record<string, string>>({});
   const rotation = useRef(0);
+  // MIGRACIÓN KA: salud del backend Knowledge Assistant DURANTE esta ejecución.
+  // Si el KA ya respondió al menos una vez, cualquier "unreachable/timeout"
+  // posterior se trata como un blip transitorio (rate-limit / corte breve a gran
+  // escala) y dejamos que el circuit breaker haga cooldown y reintente la MISMA
+  // fila, en vez de abortar todo el batch por una caída puntual. Solo paramos en
+  // seco si el KA NUNCA respondió y encadena varios fallos → problema real de
+  // config/red (p. ej. KA_URL apuntando al entorno dev interno).
+  const kaHealthyRef = useRef(false);
+  const kaUnreachableStreakRef = useRef(0);
   // Refs so the long-running loop always reads the latest values, even if the
   // user edits the context/style while it runs in the background.
   const rowsRef = useRef<BatchRow[]>([]);
@@ -246,6 +255,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     rowAttempts.current = {};
     sectionThreads.current = {};
     rotation.current = 0;
+    kaHealthyRef.current = false;
+    kaUnreachableStreakRef.current = 0;
 
     // Espera que se puede interrumpir al instante si el usuario pulsa Stop.
     const interruptibleSleep = (ms: number) =>
@@ -327,6 +338,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           };
           return next;
         });
+        // MIGRACIÓN KA: el KA respondió → lo marcamos sano y reseteamos la racha
+        // de fallos, para que un "unreachable" posterior se trate como transitorio.
+        if (backendRef.current === "ka") kaHealthyRef.current = true;
+        kaUnreachableStreakRef.current = 0;
         return "done";
       } catch (err) {
         if ((err as Error).name === "AbortError" || stopRef.current) {
@@ -351,11 +366,33 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           setError((err as Error).message);
           return "stopped";
         }
-        // El backend MCP no es alcanzable (p. ej. en Vercel): no tiene sentido
-        // reintentar 150 filas; paramos y mostramos el aviso claro.
-        if (/MCP|corporate network|npm run dev/i.test((err as Error).message)) {
+        // MCP nunca es alcanzable fuera de la red corporativa (ni en Vercel): no
+        // tiene sentido reintentar miles de filas → paramos de inmediato con el
+        // aviso claro. OJO: gateado a backend "mcp", porque el mensaje de KA
+        // ("temporarily unreachable… corporate network…") también contenía
+        // "corporate network" y antes abortaba el batch por un blip transitorio.
+        if (
+          backendRef.current === "mcp" &&
+          /MCP|corporate network|npm run dev/i.test((err as Error).message)
+        ) {
           setError((err as Error).message);
           return "stopped";
+        }
+        // KA inalcanzable / timeout: casi siempre es un blip transitorio
+        // (rate-limit o corte breve) cuando el KA ya venía respondiendo. En ese
+        // caso NO abortamos: caemos a `return "error"` para que el circuit breaker
+        // haga cooldown y reintente la MISMA fila. Solo paramos en seco si el KA
+        // NUNCA respondió en esta ejecución y ya encadena ≥3 fallos → problema real
+        // de config/red (p. ej. KA_URL apuntando a dev interno).
+        if (
+          backendRef.current === "ka" &&
+          /unreachable|temporarily|timed out/i.test((err as Error).message)
+        ) {
+          kaUnreachableStreakRef.current += 1;
+          if (!kaHealthyRef.current && kaUnreachableStreakRef.current >= 3) {
+            setError((err as Error).message);
+            return "stopped";
+          }
         }
         // El hilo de esta sección pudo quedar en mal estado: lo descartamos y
         // avanzamos la rotación para que el reintento caiga en otra sección/hilo.
