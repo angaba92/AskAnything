@@ -18,11 +18,36 @@ export async function POST(req: NextRequest) {
   }
 
   const results: Array<{ name: string; kind: string; chunks: number }> = [];
+  const sheetName = String(form.get("sheetName") ?? "").trim() || undefined;
+  const headerRowValue = Number(form.get("headerRow"));
+  const questionColumnValue = Number(form.get("questionColumn"));
+  const answerColumnValue = Number(form.get("answerColumn"));
+  const excelMapping = {
+    sheetName,
+    headerRow:
+      Number.isInteger(headerRowValue) && headerRowValue > 0
+        ? headerRowValue
+        : undefined,
+    questionColumn:
+      Number.isInteger(questionColumnValue) && questionColumnValue >= 0
+        ? questionColumnValue
+        : undefined,
+    answerColumn:
+      Number.isInteger(answerColumnValue) && answerColumnValue >= 0
+        ? answerColumnValue
+        : undefined,
+  };
 
   try {
     for (const file of files) {
       const buf = Buffer.from(await file.arrayBuffer());
-      const { kind, chunks } = await parseFile(file.name, buf);
+      const { kind, chunks } = await parseFile(file.name, buf, { excelMapping });
+
+      if (kind === "xlsx" && chunks.length === 0) {
+        throw new Error(
+          `No valid question/answer rows were found in ${file.name}. Check the worksheet and column mapping.`,
+        );
+      }
 
       const doc = await prisma.kbDoc.create({
         data: { name: file.name, kind, chunks: chunks.length },

@@ -12,7 +12,12 @@
  * eliminarlo del mensaje humano que se muestra/guarda (ver stripTemplate).
  */
 
-export type AnswerMode = "simple" | "detailed" | "bulleted" | "loopio";
+export type AnswerMode =
+  | "simple"
+  | "detailed"
+  | "bulleted" // legacy compatibility; no longer exposed in the UI
+  | "loopio"
+  | "custom";
 
 export const FORMAT_START = "[ANSWER FORMAT]";
 export const FORMAT_END = "[/ANSWER FORMAT]";
@@ -39,7 +44,7 @@ const LOOPIO_INSTRUCTIONS = `Write the answer in PLAIN TEXT only (RFP/questionna
 
 Follow this exact structure, with a blank line between blocks:
 
-1) A one-sentence verdict that starts with "Yes." or "No." or "Partially." followed by "Mastercard Dynamic Yield " and the essence of the answer.
+1) Start with one positive, direct paragraph about supported Mastercard Dynamic Yield capabilities. Use "Yes." only when it naturally and fully answers a yes/no question; never force it. NEVER start with "No." or "Partially.". Move uncertainty or unsupported detail to the internal review signal rather than the client-facing answer.
 
 2) One or more short THEMED sections. Each section begins with a very short heading of 2 to 4 words in plain text (Title case, NOT all caps, NO colon, NO markdown), on its own line — for example "Placement options", "Control", "Configuration", "Measurement and optimization". Under each heading, list its points as "• " bullets, each a complete, specific point. Use a SINGLE section for simple answers and MULTIPLE sections only when the answer has distinct themes. Group related points under the right heading instead of one long flat list.
 
@@ -61,7 +66,8 @@ export function resolveMode(input: {
     input.mode === "detailed" ||
     input.mode === "bulleted" ||
     input.mode === "simple" ||
-    input.mode === "loopio"
+    input.mode === "loopio" ||
+    input.mode === "custom"
   ) {
     return input.mode;
   }
@@ -71,7 +77,7 @@ export function resolveMode(input: {
 
 /** Devuelve solo el bloque de instrucciones de un modo (sin marcadores). */
 export function instructionsFor(mode: AnswerMode): string | null {
-  if (mode === "simple") return null;
+  if (mode === "simple" || mode === "custom") return null;
   return mode === "bulleted"
     ? BULLETED_INSTRUCTIONS
     : mode === "loopio"
@@ -127,8 +133,10 @@ export function plainifyAnswer(text: string): string {
   t = t.replace(/(^|[\s(])\*([^*\n]+?)\*(?=[\s).,;:!?]|$)/g, "$1$2");
 
   const dropLabel =
-    /^(high[-\s]?level answer|how dynamic yield does this(,?\s*high[-\s]?level answer)?|practical example|summary|details?|overview|example|examples|references|sources?|fuentes?)\s*:?\s*$/i;
+    /^(answer|final answer|response|high[-\s]?level answer|how dynamic yield does this(,?\s*high[-\s]?level answer)?|practical example|summary|details?|overview|example|examples|references|sources?|fuentes?)\s*:?\s*$/i;
   const lines = t.split(/\r?\n/).map((line) => {
+    // Separadores Markdown no aportan contenido y ensucian la celda de Excel.
+    if (/^\s*(?:-{3,}|_{3,}|\*{3,})\s*$/.test(line)) return null;
     const h = line.match(/^\s{0,3}#{1,6}\s*(.*)$/);
     if (h) {
       const label = h[1].trim();

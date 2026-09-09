@@ -2,7 +2,7 @@ const appUrlEl = document.getElementById("appUrl");
 const pushBtn = document.getElementById("push");
 const msgEl = document.getElementById("msg");
 
-const DEFAULT_URL = "http://localhost:3000";
+const DEFAULT_URL = "https://ask-anything-steel.vercel.app";
 
 // Restore the last used app URL.
 chrome.storage.sync.get(["appBaseUrl"], ({ appBaseUrl }) => {

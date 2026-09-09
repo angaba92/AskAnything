@@ -4,6 +4,11 @@ import { plainifyAnswer, enforceBullets, resolveMode } from "@/lib/promptTemplat
 import { generateStateless, resolveProvider } from "@/lib/providers";
 import { KaError } from "@/lib/kaClient";
 import { McpError, isMcpReachableEnv, MCP_UNREACHABLE_MSG } from "@/lib/mcpClient";
+import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
+import {
+  answerFromLocalKnowledge,
+  buildHybridKnowledgeContext,
+} from "@/lib/localKnowledge";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +22,7 @@ export const dynamic = "force-dynamic";
  * plantilla de dyClient). structured=false/omitido → respuesta simple y concisa.
  */
 export async function POST(req: NextRequest) {
-  const { question, context, structured, mode, threadId, sectionId, backend } = (await req.json()) as {
+  const { question, context, structured, mode, threadId, sectionId, backend, confidenceReview, customPrompt } = (await req.json()) as {
     question: string;
     context?: string;
     structured?: boolean;
@@ -25,10 +30,96 @@ export async function POST(req: NextRequest) {
     threadId?: string;
     sectionId?: string;
     backend?: string;
+    confidenceReview?: boolean;
+    customPrompt?: string;
   };
 
   if (!question?.trim()) {
     return NextResponse.json({ error: "question is required" }, { status: 400 });
+  }
+  if (
+    mode === "custom" &&
+    (!customPrompt?.trim() || customPrompt.trim().length > MAX_CUSTOM_PROMPT_CHARS)
+  ) {
+    return NextResponse.json(
+      {
+        error: customPrompt?.trim()
+          ? `Custom prompt is too long (${customPrompt.trim().length} characters). Maximum: ${MAX_CUSTOM_PROMPT_CHARS}.`
+          : "Custom mode requires a non-empty .md prompt.",
+      },
+      { status: 400 },
+    );
+  }
+
+  if (backend === "local") {
+    const local = await answerFromLocalKnowledge(question.trim());
+    return NextResponse.json({
+      ok: true,
+      answer: local.answer,
+      expert: "local_library",
+      tools: local.sourcesText || "local_library",
+      threadId: "",
+      reviewRequired: local.reviewRequired,
+      reviewReason: local.reviewReason,
+      matchConfidence: local.confidence,
+    });
+  }
+
+  if (backend === "hybrid") {
+    const local = await answerFromLocalKnowledge(question.trim());
+    const localContext = buildHybridKnowledgeContext(
+      local.hits,
+      mode === "custom" ? 1800 : 4500,
+    );
+    const enrichedContext = [context?.trim(), localContext]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n");
+
+    try {
+      const r = await generateStateless("ka", {
+        question,
+        mode,
+        structured,
+        context: enrichedContext || undefined,
+        confidenceReview,
+        customPrompt,
+      });
+      const localReviewRequired = local.hits.length > 0 && local.reviewRequired;
+      const reviewReasons = [
+        r.reviewReason,
+        localReviewRequired ? local.reviewReason : "",
+      ].filter(Boolean);
+      return NextResponse.json({
+        ok: true,
+        answer: r.answer,
+        expert: "knowledge_assistant + local_library",
+        tools: [local.sourcesText, r.sourcesText].filter(Boolean).join("; "),
+        threadId: "",
+        reviewRequired: Boolean(r.reviewRequired || localReviewRequired),
+        reviewReason: reviewReasons.join(" "),
+        matchConfidence: local.confidence,
+      });
+    } catch (err) {
+      if (local.hits.length > 0) {
+        return NextResponse.json({
+          ok: true,
+          answer: local.answer,
+          expert: "local_library (KA fallback)",
+          tools: local.sourcesText,
+          threadId: "",
+          reviewRequired: true,
+          reviewReason: [
+            "Knowledge Assistant was unavailable; the best local-library answer was used.",
+            local.reviewReason,
+          ]
+            .filter(Boolean)
+            .join(" "),
+          matchConfidence: local.confidence,
+        });
+      }
+      const status = err instanceof KaError ? err.status ?? 502 : 500;
+      return NextResponse.json({ error: (err as Error).message }, { status });
+    }
   }
 
   // MIGRACIÓN: el proveedor por defecto pasa a ser "ka" (DY Knowledge Assistant).
@@ -38,13 +129,22 @@ export async function POST(req: NextRequest) {
   // NUEVO backend por defecto: DY Knowledge Assistant (stateless, con fuentes).
   if (provider === "ka") {
     try {
-      const r = await generateStateless("ka", { question, mode, structured, context });
+      const r = await generateStateless("ka", {
+        question,
+        mode,
+        structured,
+        context,
+        confidenceReview,
+        customPrompt,
+      });
       return NextResponse.json({
         ok: true,
         answer: r.answer,
         expert: r.expert,
         tools: r.sourcesText || "knowledge_assistant",
         threadId: r.threadId,
+        reviewRequired: r.reviewRequired ?? false,
+        reviewReason: r.reviewReason ?? "",
       });
     } catch (err) {
       const status = err instanceof KaError ? err.status ?? 502 : 500;

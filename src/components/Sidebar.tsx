@@ -53,12 +53,6 @@ export default function Sidebar({
             testing
           </span>
         </Link>
-        <Link
-          href="/settings"
-          className="mt-1 block text-xs font-medium text-brand hover:underline"
-        >
-          ⬚ DY session / settings
-        </Link>
         <div className="mt-3 flex flex-wrap gap-1">
           {["All", ...STATUSES].map((s) => (
             <button

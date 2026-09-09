@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
+import * as XLSX from "xlsx";
 
 interface KbDoc {
   id: string;
@@ -20,6 +21,28 @@ interface Source {
   preview: string;
 }
 
+interface KbSpreadsheetColumn {
+  index: number;
+  letter: string;
+  label: string;
+  display: string;
+}
+
+const QUESTION_HEADERS = ["question", "pregunta", "questions", "q", "prompt"];
+const ANSWER_HEADERS = [
+  "updated answer",
+  "updated response",
+  "respuesta actualizada",
+  "revised answer",
+  "approved answer",
+  "answer",
+  "respuesta",
+  "answers",
+  "a",
+  "response",
+  "reply",
+];
+
 export default function KbPage() {
   const [configured, setConfigured] = useState(true);
   const [aiWriter, setAiWriter] = useState(false);
@@ -33,7 +56,17 @@ export default function KbPage() {
   const [sources, setSources] = useState<Source[]>([]);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mappingOpen, setMappingOpen] = useState(false);
+  const [pendingSpreadsheet, setPendingSpreadsheet] = useState<File | null>(null);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState("");
+  const [headerRow, setHeaderRow] = useState(1);
+  const [columns, setColumns] = useState<KbSpreadsheetColumn[]>([]);
+  const [questionColumn, setQuestionColumn] = useState("");
+  const [answerColumn, setAnswerColumn] = useState("");
+  const [previewRows, setPreviewRows] = useState<string[][]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const workbookRef = useRef<XLSX.WorkBook | null>(null);
 
   const loadStatus = useCallback(async () => {
     const res = await fetch("/api/kb/status");
@@ -50,13 +83,25 @@ export default function KbPage() {
     loadStatus();
   }, [loadStatus]);
 
-  async function upload(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  async function uploadFiles(
+    files: File[],
+    mapping?: {
+      sheetName: string;
+      headerRow: number;
+      questionColumn: number;
+      answerColumn: number;
+    },
+  ) {
     setUploading(true);
     setError(null);
     const fd = new FormData();
-    Array.from(files).forEach((f) => fd.append("files", f));
+    files.forEach((f) => fd.append("files", f));
+    if (mapping) {
+      fd.set("sheetName", mapping.sheetName);
+      fd.set("headerRow", String(mapping.headerRow));
+      fd.set("questionColumn", String(mapping.questionColumn));
+      fd.set("answerColumn", String(mapping.answerColumn));
+    }
     try {
       const res = await fetch("/api/kb/ingest", { method: "POST", body: fd });
       const data = await res.json();
@@ -68,6 +113,123 @@ export default function KbPage() {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
+  }
+
+  async function upload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    const spreadsheets = files.filter((file) => /\.xlsx?$/i.test(file.name));
+    if (spreadsheets.length > 0) {
+      if (files.length !== 1) {
+        setError(
+          "Upload one spreadsheet at a time so its worksheet and columns can be mapped. PDF and DOCX files can still be uploaded together.",
+        );
+        if (fileRef.current) fileRef.current.value = "";
+        return;
+      }
+      await openSpreadsheetMapping(spreadsheets[0]);
+      return;
+    }
+    await uploadFiles(files);
+  }
+
+  async function openSpreadsheetMapping(file: File) {
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      if (workbook.SheetNames.length === 0) {
+        throw new Error("The workbook has no worksheets.");
+      }
+      workbookRef.current = workbook;
+      setPendingSpreadsheet(file);
+      setSheetNames(workbook.SheetNames);
+      configureSpreadsheet(workbook.SheetNames[0]);
+      setMappingOpen(true);
+      setError(null);
+    } catch (err) {
+      setError(`Could not read the spreadsheet: ${(err as Error).message}`);
+    }
+  }
+
+  function configureSpreadsheet(sheetName: string, requestedHeaderRow?: number) {
+    const worksheet = workbookRef.current?.Sheets[sheetName];
+    if (!worksheet) return;
+    const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+      header: 1,
+      defval: "",
+      raw: false,
+    }).map((row) => row.map((cell) => String(cell ?? "")));
+    const detectedHeaderRow =
+      requestedHeaderRow ??
+      detectHeaderRow(matrix);
+    const nextHeaderRow = Math.max(
+      1,
+      Math.min(detectedHeaderRow, matrix.length || 1),
+    );
+    const header = matrix[nextHeaderRow - 1] ?? [];
+    const maxColumns = Math.max(
+      header.length,
+      ...matrix.slice(nextHeaderRow - 1, nextHeaderRow + 6).map((row) => row.length),
+    );
+    const nextColumns = Array.from({ length: maxColumns }, (_, index) => {
+      const label = String(header[index] ?? "").trim();
+      const letter = XLSX.utils.encode_col(index);
+      return {
+        index,
+        letter,
+        label,
+        display: `${letter} — ${label || "(empty)"}`,
+      };
+    });
+    const normalized = (value: string) => value.trim().toLowerCase();
+    const detectedQuestion = nextColumns.find((column) =>
+      QUESTION_HEADERS.includes(normalized(column.label)),
+    );
+    const detectedAnswer = nextColumns.find((column) =>
+      ANSWER_HEADERS.includes(normalized(column.label)),
+    );
+
+    setSelectedSheet(sheetName);
+    setHeaderRow(nextHeaderRow);
+    setColumns(nextColumns);
+    setQuestionColumn(String(detectedQuestion?.index ?? ""));
+    setAnswerColumn(String(detectedAnswer?.index ?? ""));
+    setPreviewRows(matrix.slice(0, Math.min(matrix.length, nextHeaderRow + 6)));
+  }
+
+  function detectHeaderRow(matrix: string[][]): number {
+    let bestIndex = 0;
+    let bestScore = -1;
+    matrix.slice(0, 30).forEach((row, index) => {
+      const values = row.map((value) => value.trim().toLowerCase());
+      const score =
+        (values.some((value) => QUESTION_HEADERS.includes(value)) ? 6 : 0) +
+        (values.some((value) => ANSWER_HEADERS.includes(value)) ? 5 : 0);
+      if (score > bestScore) {
+        bestIndex = index;
+        bestScore = score;
+      }
+    });
+    return bestIndex + 1;
+  }
+
+  async function applySpreadsheetMapping() {
+    if (
+      !pendingSpreadsheet ||
+      questionColumn === "" ||
+      answerColumn === ""
+    ) {
+      setError("Select both the question and answer columns.");
+      return;
+    }
+    setMappingOpen(false);
+    await uploadFiles([pendingSpreadsheet], {
+      sheetName: selectedSheet,
+      headerRow,
+      questionColumn: Number(questionColumn),
+      answerColumn: Number(answerColumn),
+    });
+    setPendingSpreadsheet(null);
+    workbookRef.current = null;
   }
 
   async function remove(id: string) {
@@ -101,6 +263,171 @@ export default function KbPage() {
 
   return (
     <div className="mx-auto max-w-5xl p-6">
+      {mappingOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="kb-mapping-title"
+            className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+          >
+            <div className="flex items-start justify-between border-b border-gray-200 px-5 py-4">
+              <div>
+                <h2 id="kb-mapping-title" className="text-lg font-semibold text-gray-900">
+                  Map knowledge-base columns
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  Choose exactly which questions and approved answers should be stored.
+                  Updated Answer is preferred automatically when present.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMappingOpen(false);
+                  setPendingSpreadsheet(null);
+                  workbookRef.current = null;
+                }}
+                className="rounded-lg px-2 py-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                aria-label="Close mapping"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid gap-4 border-b border-gray-200 bg-gray-50 p-5 md:grid-cols-4">
+              <label>
+                <span className="mb-1 block text-xs font-medium text-gray-600">
+                  Worksheet
+                </span>
+                <select
+                  value={selectedSheet}
+                  onChange={(event) => configureSpreadsheet(event.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                >
+                  {sheetNames.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-medium text-gray-600">
+                  Header row
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={headerRow}
+                  onChange={(event) =>
+                    configureSpreadsheet(
+                      selectedSheet,
+                      Number(event.target.value) || 1,
+                    )
+                  }
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                />
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-medium text-gray-600">
+                  Question column
+                </span>
+                <select
+                  value={questionColumn}
+                  onChange={(event) => setQuestionColumn(event.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                >
+                  <option value="">Select…</option>
+                  {columns.map((column) => (
+                    <option key={column.index} value={column.index}>
+                      {column.display}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-medium text-gray-600">
+                  Approved answer column
+                </span>
+                <select
+                  value={answerColumn}
+                  onChange={(event) => setAnswerColumn(event.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                >
+                  <option value="">Select…</option>
+                  {columns.map((column) => (
+                    <option key={column.index} value={column.index}>
+                      {column.display}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto p-5">
+              <p className="mb-2 text-xs font-medium text-gray-600">
+                Worksheet preview — selected header row highlighted
+              </p>
+              <table className="min-w-full border-collapse text-xs">
+                <tbody>
+                  {previewRows.map((row, rowIndex) => (
+                    <tr
+                      key={rowIndex}
+                      className={
+                        rowIndex === headerRow - 1
+                          ? "bg-brand/10 font-semibold text-brand-dark"
+                          : "text-gray-600"
+                      }
+                    >
+                      <td className="sticky left-0 border border-gray-200 bg-gray-50 px-2 py-1 text-gray-400">
+                        {rowIndex + 1}
+                      </td>
+                      {columns.map((column) => (
+                        <td
+                          key={column.index}
+                          className="max-w-xs truncate border border-gray-200 px-2 py-1"
+                          title={row[column.index] ?? ""}
+                        >
+                          <span className="mr-1 text-[10px] text-gray-400">
+                            {column.letter}
+                          </span>
+                          {row[column.index] || "—"}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-gray-200 px-5 py-4">
+              <span className="text-xs text-gray-500">
+                {pendingSpreadsheet?.name}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMappingOpen(false)}
+                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void applySpreadsheetMapping()}
+                  disabled={
+                    uploading || questionColumn === "" || answerColumn === ""
+                  }
+                  className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
+                >
+                  Import into library
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-brand-dark">
           Knowledge base (RFP assistant)
@@ -238,7 +565,7 @@ export default function KbPage() {
             </p>
             {uploading && (
               <p className="mt-2 text-xs text-amber-600">
-                Parsing &amp; embedding… (can take a while for big files)
+                Parsing &amp; indexing… (can take a while for big files)
               </p>
             )}
 

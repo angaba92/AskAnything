@@ -34,6 +34,10 @@ export interface ProviderAnswer {
   expert: string;
   /** Id de hilo si el proveedor es threaded ("" para los stateless). */
   threadId: string;
+  /** El batch debe revisar esta respuesta antes de enviarla al cliente. */
+  reviewRequired?: boolean;
+  /** Motivo breve y accionable para la columna editable de revisión. */
+  reviewReason?: string;
 }
 
 /** Opciones comunes de generación para proveedores stateless. */
@@ -42,4 +46,8 @@ export interface GenerateOpts {
   mode?: string;
   structured?: boolean;
   context?: string;
+  /** Solicita una autoevaluación separada de confianza para el flujo bulk. */
+  confidenceReview?: boolean;
+  /** Instrucciones cargadas por el usuario; sustituyen las integradas en Custom. */
+  customPrompt?: string;
 }

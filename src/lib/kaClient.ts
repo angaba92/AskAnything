@@ -23,8 +23,11 @@
 
 /** Base URL del KA. Por defecto la de PRODUCCIÓN (pública). Configurable por env
  * para poder apuntar al entorno dev (`*.dev.dydy.io`) o a un futuro dominio. */
-export const KA_URL =
-  process.env.KA_URL ?? "https://dy-knowledge-assistant.use1.dynamicyield.com";
+export const KA_URL = (
+  process.env.KA_URL ?? "https://dy-knowledge-assistant.use1.dynamicyield.com"
+).trim().replace(/\/+$/, "");
+
+const KA_HOST = new URL(KA_URL).host;
 
 export interface KaSource {
   title?: string;
@@ -128,15 +131,8 @@ export async function kaChat(
       });
 
       if (!res.ok) {
-        const body = (await res.text().catch(() => "")).slice(0, 300).replace(/\s+/g, " ").trim();
-        // 5xx → transitorio, reintentamos; 4xx → error del cliente, no.
-        if (res.status >= 500 && attempt < retries) {
-          log("warn", `HTTP ${res.status} (attempt ${attempt + 1}/${retries + 1}), retrying`, body);
-          lastErr = new KaError(`KA responded ${res.status}: ${body}`, res.status);
-          await backoff(attempt);
-          continue;
-        }
-        throw new KaError(`KA responded ${res.status}: ${body}`, res.status);
+        await res.body?.cancel().catch(() => undefined);
+        throw new KaError(`Knowledge Assistant responded HTTP ${res.status}.`, res.status);
       }
 
       // La respuesta es texto plano en streaming: res.text() acumula el total.
@@ -145,13 +141,46 @@ export async function kaChat(
       return { text, sources: parseKaSources(text) };
     } catch (err) {
       const e = err as Error;
+      if (e instanceof KaError) {
+        lastErr = e;
+        log(resumableStatus(e.status) ? "warn" : "error", "HTTP request failed", {
+          host: KA_HOST,
+          status: e.status,
+          attempt: attempt + 1,
+          attempts: retries + 1,
+        });
+        if (resumableStatus(e.status) && attempt < retries) {
+          await backoff(attempt);
+          continue;
+        }
+        throw e;
+      }
+
       if (e.name === "AbortError") {
         // Distinguimos cancelación externa (propagar) de timeout interno.
         if (opts.signal?.aborted) throw new KaError("KA request aborted.", 499);
         lastErr = new KaError("KA request timed out.", 504);
+        log("warn", "request timed out", {
+          host: KA_HOST,
+          timeoutMs,
+          attempt: attempt + 1,
+          attempts: retries + 1,
+        });
       } else {
-        // Fallo de red (host inalcanzable, DNS, TLS…).
-        lastErr = new KaError(KA_UNREACHABLE_MSG, 503);
+        const cause = networkCause(e);
+        log("error", "network request failed", {
+          host: KA_HOST,
+          error: e.name,
+          code: cause.code,
+          cause: cause.name,
+          causeMessage: cause.message,
+          attempt: attempt + 1,
+          attempts: retries + 1,
+        });
+        lastErr = new KaError(
+          `${KA_UNREACHABLE_MSG} Diagnostic: host=${KA_HOST}, code=${cause.code ?? "unknown"}.`,
+          503,
+        );
       }
       if (attempt < retries) {
         log("warn", `${lastErr.message} (attempt ${attempt + 1}/${retries + 1}), retrying`);
@@ -165,6 +194,29 @@ export async function kaChat(
 
   log("error", `failed after ${retries + 1} attempts`, lastErr?.message);
   throw lastErr ?? new KaError(KA_UNREACHABLE_MSG, 503);
+}
+
+function resumableStatus(status?: number): boolean {
+  return status === 429 || (status !== undefined && status >= 500);
+}
+
+function networkCause(error: Error): {
+  code?: string;
+  name?: string;
+  message?: string;
+} {
+  const cause = error.cause;
+  if (!cause || typeof cause !== "object") return {};
+
+  const value = cause as Record<string, unknown>;
+  return {
+    code: typeof value.code === "string" ? value.code : undefined,
+    name: typeof value.name === "string" ? value.name : undefined,
+    message:
+      typeof value.message === "string"
+        ? value.message.slice(0, 200)
+        : undefined,
+  };
 }
 
 /** Backoff corto y con jitter entre reintentos. */

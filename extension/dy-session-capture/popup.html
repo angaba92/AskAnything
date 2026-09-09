@@ -24,11 +24,18 @@
     </style>
   </head>
   <body>
-    <h1>Refresh DY session</h1>
+    <h1>AskAnything corporate bridge</h1>
+    <div class="msg ok">
+      Bridge enabled. Keep the corporate VPN connected while using AskAnything.
+    </div>
     <label for="appUrl">AskAnything app URL</label>
     <input id="appUrl" type="url" placeholder="http://localhost:3000" />
     <button id="push">Capture &amp; push session</button>
     <div id="msg" class="msg"></div>
+    <div class="hint">
+      The bridge lets the Vercel app reach the VPN-only Knowledge Assistant.
+      The legacy session refresh below is optional.
+    </div>
     <div class="hint">
       Reads the DY cookie (incl. HttpOnly) for adm.dynamicyield.com and sends it to
       <code>/api/dy-session</code>. Make sure you are logged in to DY first.

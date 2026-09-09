@@ -13,7 +13,23 @@ export interface ParsedChunk {
 }
 
 const QUESTION_KEYS = ["question", "pregunta", "questions", "q", "prompt"];
+const UPDATED_ANSWER_KEYS = [
+  "updated answer",
+  "updated response",
+  "respuesta actualizada",
+  "revised answer",
+  "approved answer",
+];
 const ANSWER_KEYS = ["answer", "respuesta", "answers", "a", "response", "reply"];
+
+export interface ExcelIngestMapping {
+  sheetName?: string;
+  /** One-based row containing column headers. */
+  headerRow?: number;
+  /** Zero-based worksheet column indexes. */
+  questionColumn?: number;
+  answerColumn?: number;
+}
 
 /** Trocea texto largo en pasajes de ~maxChars con solape, respetando párrafos. */
 function chunkText(text: string, maxChars = 1200, overlap = 150): string[] {
@@ -38,29 +54,56 @@ function chunkText(text: string, maxChars = 1200, overlap = 150): string[] {
   return chunks;
 }
 
-function detectCol(cols: string[], keys: string[]): string | undefined {
-  return cols.find((c) => keys.includes(c.trim().toLowerCase()));
+function parseMappedSheet(
+  ws: XLSX.WorkSheet,
+  mapping: ExcelIngestMapping,
+): ParsedChunk[] {
+  const matrix = XLSX.utils.sheet_to_json<unknown[]>(ws, {
+    header: 1,
+    defval: "",
+    raw: false,
+  });
+  const headerIndex = Math.max(0, (mapping.headerRow ?? 1) - 1);
+  const headers = (matrix[headerIndex] ?? []).map((cell) => String(cell ?? "").trim());
+  const qIndex =
+    mapping.questionColumn ??
+    headers.findIndex((header) => QUESTION_KEYS.includes(header.toLowerCase()));
+  const preferredAnswerIndex = headers.findIndex((header) =>
+    UPDATED_ANSWER_KEYS.includes(header.toLowerCase()),
+  );
+  const fallbackAnswerIndex = headers.findIndex((header) =>
+    ANSWER_KEYS.includes(header.toLowerCase()),
+  );
+  const aIndex =
+    mapping.answerColumn ??
+    (preferredAnswerIndex >= 0 ? preferredAnswerIndex : fallbackAnswerIndex);
+
+  if (qIndex < 0 || aIndex < 0) return [];
+
+  return matrix
+    .slice(headerIndex + 1)
+    .map((row) => ({
+      kind: "qa" as const,
+      question: String(row[qIndex] ?? "").trim(),
+      text: String(row[aIndex] ?? "").trim(),
+    }))
+    .filter((chunk) => chunk.question && chunk.text);
 }
 
 /** Parsea un Excel como banco de pares Q&A. */
-export function parseXlsx(buf: ArrayBuffer): ParsedChunk[] {
+export function parseXlsx(
+  buf: ArrayBuffer,
+  mapping: ExcelIngestMapping = {},
+): ParsedChunk[] {
   const wb = XLSX.read(buf, { type: "array" });
   const out: ParsedChunk[] = [];
-  for (const sheetName of wb.SheetNames) {
+  const sheetNames = mapping.sheetName ? [mapping.sheetName] : wb.SheetNames;
+  for (const sheetName of sheetNames) {
     const ws = wb.Sheets[sheetName];
-    const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
-      defval: "",
-    });
-    if (json.length === 0) continue;
-    const cols = Object.keys(json[0]);
-    const qCol = detectCol(cols, QUESTION_KEYS) ?? cols[0];
-    const aCol = detectCol(cols, ANSWER_KEYS) ?? cols[1] ?? cols[0];
-    for (const row of json) {
-      const question = String(row[qCol] ?? "").trim();
-      const answer = String(row[aCol] ?? "").trim();
-      if (!question || !answer) continue;
-      out.push({ kind: "qa", question, text: answer });
+    if (!ws) {
+      throw new Error(`Worksheet not found: ${sheetName}`);
     }
+    out.push(...parseMappedSheet(ws, mapping));
   }
   return out;
 }
@@ -81,12 +124,16 @@ export async function parseDocx(buf: Buffer): Promise<ParsedChunk[]> {
 
 export async function parseFile(
   name: string,
-  buf: Buffer
+  buf: Buffer,
+  options: { excelMapping?: ExcelIngestMapping } = {},
 ): Promise<{ kind: string; chunks: ParsedChunk[] }> {
   const lower = name.toLowerCase();
   if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
     const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-    return { kind: "xlsx", chunks: parseXlsx(ab as ArrayBuffer) };
+    return {
+      kind: "xlsx",
+      chunks: parseXlsx(ab as ArrayBuffer, options.excelMapping),
+    };
   }
   if (lower.endsWith(".pdf")) {
     return { kind: "pdf", chunks: await parsePdf(buf) };

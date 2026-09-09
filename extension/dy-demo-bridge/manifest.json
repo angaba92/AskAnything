@@ -1,0 +1,94 @@
+{
+  "manifest_version": 3,
+  "name": "dy-demo",
+  "description": "Run Dynamic Yield on sites locally, with an AskAnything corporate bridge.",
+  "version": "2.5.3",
+  "icons": {
+    "16": "/images/logo-16.png",
+    "48": "/images/logo-48.png",
+    "128": "/images/logo-128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0MgUfsQhLaOuXT+OgVhvbEoVZ5Z0OHuZxI2hPE6fbZXj9NAT+ZBMOFwTTWudAT/c70t7j3QYGcPVWgFuAMdkzuWL01xOWIkLZGwrnSTB1+YGOlwLCM7V/V72RUCqsksO0Wh4CFCbcrpLILeY6pL2aLfKfEXP+NDY5q/788VHgF4xZxF5On2VzcELZw4LK1tHtFEGLOSCLoxXi7Ckl4LfYTJggyIBMbgy7qICtoLSLLOrP9ICdHFk0OtcCNu4BrJMGdnS8TI/VrRPL82YV5pYDVTl7Tegivuj7x0PB1fd0QweosgtAro9z7945casAwV0PT+lAlNxaKRytAbcrWGpIwIDAQAB",
+  "permissions": [
+    "webRequest",
+    "activeTab",
+    "declarativeNetRequestWithHostAccess",
+    "declarativeNetRequest",
+    "tabs",
+    "storage",
+    "cookies",
+    "webNavigation",
+    "scripting",
+    "offscreen",
+    "debugger"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "Popup",
+    "default_icon": {
+      "16": "/images/logo-off-16.png",
+      "48": "/images/logo-off-48.png",
+      "128": "/images/logo-off-128.png"
+    },
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'",
+    "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-eval'"
+  },
+  "sandbox": {
+    "pages": ["sandbox.html"]
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "strip-frame-headers",
+        "enabled": true,
+        "path": "rules/strip-frame-headers.json"
+      }
+    ]
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "open_in_tab": false,
+    "page": "options.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "run_at": "document_start",
+      "js": [
+        "content-scripts/recording-status.js",
+        "content-scripts/reportInjector.js"
+      ]
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "content-scripts/scraper.js",
+        "content-scripts/snipcss.js"
+      ]
+    },
+    {
+      "matches": [
+        "http://localhost:3001/*",
+        "https://adm.dynamicyield.com/*",
+        "https://adm.dynamicyield.eu/*"
+      ],
+      "run_at": "document_start",
+      "js": ["content-scripts/xhr-patch-injector.js"],
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://ask-anything-steel.vercel.app/*",
+        "http://localhost:3000/*",
+        "http://127.0.0.1:3000/*"
+      ],
+      "run_at": "document_start",
+      "js": ["content-scripts/askanything-bridge.js"]
+    }
+  ]
+}

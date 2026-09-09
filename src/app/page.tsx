@@ -3,18 +3,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import MessageBubble from "@/components/MessageBubble";
-import CopilotPanel from "@/components/CopilotPanel";
 import {
   STATUSES,
   STATUS_LABEL,
   type ThreadDetail,
   type ThreadListItem,
 } from "@/lib/types";
-import { ANSWER_MODES, MODE_LABELS, MODE_HINTS, type AnswerMode } from "@/lib/promptMapping";
-
-// MIGRACIÓN: proveedores disponibles. "ka" (DY Knowledge Assistant) es el nuevo
-// por defecto y recomendado; "agent" y "mcp" quedan como backup ("DO NOT USE").
-type Backend = "ka" | "agent" | "mcp";
+import {
+  ANSWER_MODES,
+  MAX_CUSTOM_PROMPT_CHARS,
+  MODE_LABELS,
+  MODE_HINTS,
+  type AnswerMode,
+} from "@/lib/promptMapping";
+import {
+  askKaViaExtension,
+  isExtensionBridgeAvailable,
+} from "@/lib/extensionBridge";
 
 export default function Home() {
   const [threads, setThreads] = useState<ThreadListItem[]>([]);
@@ -24,10 +29,11 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copilotQuestion, setCopilotQuestion] = useState<string | null>(null);
   const [mode, setMode] = useState<AnswerMode>("detailed");
-  const [backend, setBackend] = useState<Backend>("ka");
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [customPromptFileName, setCustomPromptFileName] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
+  const [bridgeConnected, setBridgeConnected] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -51,10 +57,23 @@ export default function Home() {
   }, [loadThreads]);
 
   useEffect(() => {
-    // MIGRACIÓN KA: KA/MCP guardan el historial localmente y no deben intentar
-    // sincronizar el thread contra Experience OS. Solo Agent Mode usa threads DY.
-    if (activeId) loadDetail(activeId, backend === "agent");
-  }, [activeId, backend, loadDetail]);
+    let active = true;
+    const check = () => {
+      isExtensionBridgeAvailable().then((connected) => {
+        if (active) setBridgeConnected(connected);
+      });
+    };
+    check();
+    window.addEventListener("focus", check);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", check);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeId) loadDetail(activeId);
+  }, [activeId, loadDetail]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -65,7 +84,7 @@ export default function Home() {
     const res = await fetch("/api/threads/new", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ backend }),
+      body: JSON.stringify({ backend: "ka" }),
     });
     if (res.ok) {
       const { id } = await res.json();
@@ -84,7 +103,6 @@ export default function Home() {
     setSending(true);
     const text = input;
     setInput("");
-    setCopilotQuestion(text);
 
     // Optimista: pintamos el mensaje humano.
     setDetail((d) =>
@@ -105,10 +123,40 @@ export default function Home() {
         : d
     );
 
+    const connected =
+      bridgeConnected || (await isExtensionBridgeAvailable());
+    setBridgeConnected(connected);
+    if (!connected) {
+      setError(
+        "Corporate bridge not connected. Install/reload the AskAnything Chrome or Edge extension and connect to the VPN.",
+      );
+      setSending(false);
+      return;
+    }
+    let localKaResponse: string;
+    try {
+      localKaResponse = await askKaViaExtension(text, {
+        mode,
+        customPrompt: mode === "custom" ? customPrompt : undefined,
+      });
+    } catch (bridgeError) {
+      setBridgeConnected(false);
+      setError((bridgeError as Error).message);
+      setSending(false);
+      return;
+    }
+
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ threadId: activeId, message: text, mode, backend }),
+      body: JSON.stringify({
+        threadId: activeId,
+        message: text,
+        mode,
+        backend: "ka",
+        customPrompt: mode === "custom" ? customPrompt : undefined,
+        localKaResponse,
+      }),
     });
 
     if (res.ok) {
@@ -157,17 +205,8 @@ export default function Home() {
 
       <main className="flex min-w-0 flex-1 flex-col">
         {error && (
-          <div className="flex items-center justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
             <span>{error}</span>
-            {backend === "agent" &&
-              /caduc|sesión|session|cookie|XSRF/i.test(error) && (
-              <a
-                href="/settings"
-                className="shrink-0 rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700"
-              >
-                Refresh session →
-              </a>
-            )}
           </div>
         )}
 
@@ -225,6 +264,17 @@ export default function Home() {
                 </button>
               )}
               <div className="flex shrink-0 items-center gap-3">
+                <span
+                  className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                    bridgeConnected
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-amber-50 text-amber-700"
+                  }`}
+                >
+                  {bridgeConnected
+                    ? "Corporate bridge connected"
+                    : "Corporate bridge required"}
+                </span>
                 <select
                   value={detail.status}
                   onChange={(e) => patchThread({ status: e.target.value })}
@@ -236,14 +286,6 @@ export default function Home() {
                     </option>
                   ))}
                 </select>
-                {backend === "agent" && (
-                  <button
-                    onClick={() => loadDetail(detail.id, true)}
-                    className="rounded-lg border border-gray-300 px-3 py-1 text-sm hover:bg-gray-50"
-                  >
-                    Sync
-                  </button>
-                )}
               </div>
             </header>
 
@@ -285,52 +327,49 @@ export default function Home() {
                   ))}
                 </div>
                 <span className="text-[11px] text-gray-400">{MODE_HINTS[mode]}</span>
-                <span className="mx-1 h-4 w-px bg-gray-200" />
-                <span className="text-xs text-gray-400">Backend:</span>
-                {/* MIGRACIÓN: KA es el nuevo por defecto (recomendado). Agent y MCP
-                    se mantienen disponibles pero marcados "DO NOT USE" (backup). */}
-                <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setBackend("ka")}
-                    className={`px-2.5 py-1 ${
-                      backend === "ka" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-                    }`}
-                  >
-                    Knowledge Assistant
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBackend("agent")}
-                    title="Deprecated — backup only. Do not use."
-                    className={`border-l border-gray-300 px-2.5 py-1 ${
-                      backend === "agent"
-                        ? "bg-red-600 text-white"
-                        : "bg-white text-gray-400 line-through hover:bg-gray-50"
-                    }`}
-                  >
-                    Agent · DO NOT USE
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBackend("mcp")}
-                    title="Deprecated — backup only. Do not use."
-                    className={`border-l border-gray-300 px-2.5 py-1 ${
-                      backend === "mcp"
-                        ? "bg-red-600 text-white"
-                        : "bg-white text-gray-400 line-through hover:bg-gray-50"
-                    }`}
-                  >
-                    MCP · DO NOT USE
-                  </button>
-                </div>
-                <span className="text-[11px] text-gray-400">
-                  {backend === "ka"
-                    ? "DY Knowledge Assistant — grounded, cited answers (recommended)"
-                    : backend === "mcp"
-                    ? "Backup only · corporate network — run locally"
-                    : "Backup only · Experience OS agent (threaded)"}
-                </span>
+                {mode === "custom" && (
+                  <>
+                    <label className="cursor-pointer rounded-lg bg-brand px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-dark">
+                      Upload .md
+                      <input
+                        type="file"
+                        accept=".md,text/markdown"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const text = await file.text();
+                          if (!text.trim()) {
+                            setError("The custom prompt file is empty.");
+                            return;
+                          }
+                          const trimmed = text.trim();
+                          if (trimmed.length > MAX_CUSTOM_PROMPT_CHARS) {
+                            setError(
+                              `Custom prompt is too long (${trimmed.length.toLocaleString()} characters). Maximum: ${MAX_CUSTOM_PROMPT_CHARS.toLocaleString()}.`,
+                            );
+                            setCustomPrompt("");
+                            setCustomPromptFileName("");
+                            return;
+                          }
+                          setCustomPrompt(trimmed);
+                          setCustomPromptFileName(file.name);
+                          setError(null);
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                    <span
+                      className={`text-[11px] ${
+                        customPrompt ? "text-brand" : "text-amber-600"
+                      }`}
+                    >
+                      {customPrompt
+                        ? `${customPromptFileName} loaded`
+                        : "Upload a prompt before sending"}
+                    </span>
+                  </>
+                )}
               </div>
               <div className="flex items-end gap-2">
                 <textarea
@@ -348,7 +387,11 @@ export default function Home() {
                 />
                 <button
                   onClick={handleSend}
-                  disabled={sending || !input.trim()}
+                  disabled={
+                    sending ||
+                    !input.trim() ||
+                    (mode === "custom" && !customPrompt.trim())
+                  }
                   className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
                 >
                   Send
@@ -358,8 +401,6 @@ export default function Home() {
           </>
         )}
       </main>
-
-      <CopilotPanel question={copilotQuestion} />
     </div>
   );
 }

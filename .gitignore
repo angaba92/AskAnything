@@ -24,3 +24,8 @@ prisma/dev.db-journal
 
 # Vercel
 .vercel
+.env*
+
+# Locally packed browser extensions and private signing keys
+extension/*.crx
+extension/*.pem

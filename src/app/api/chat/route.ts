@@ -4,8 +4,10 @@ import { sendMessageWithRetry, getThread, DyAuthError, type DyMessage } from "@/
 import { persistMessages } from "@/lib/persist";
 import { resolveMode } from "@/lib/promptTemplate";
 import { generateStateless, resolveProvider, isStateless } from "@/lib/providers";
+import { normalizeBridgedKaResponse } from "@/lib/providers/ka";
 import { KaError } from "@/lib/kaClient";
 import { McpError, isMcpReachableEnv, MCP_UNREACHABLE_MSG } from "@/lib/mcpClient";
+import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
 
 export const dynamic = "force-dynamic";
 
@@ -15,18 +17,39 @@ export const dynamic = "force-dynamic";
  * persiste la respuesta y la devuelve.
  */
 export async function POST(req: NextRequest) {
-  const { threadId, message, structured, mode, backend } = (await req.json()) as {
+  const { threadId, message, structured, mode, backend, customPrompt, localKaResponse } = (await req.json()) as {
     threadId: string;
     message: string;
     structured?: boolean;
     mode?: string;
     backend?: string;
+    customPrompt?: string;
+    localKaResponse?: string;
   };
 
   if (!threadId || !message?.trim()) {
     return NextResponse.json(
       { error: "threadId and message are required" },
       { status: 400 }
+    );
+  }
+  if (
+    mode === "custom" &&
+    (!customPrompt?.trim() || customPrompt.trim().length > MAX_CUSTOM_PROMPT_CHARS)
+  ) {
+    return NextResponse.json(
+      {
+        error: customPrompt?.trim()
+          ? `Custom prompt is too long (${customPrompt.trim().length} characters). Maximum: ${MAX_CUSTOM_PROMPT_CHARS}.`
+          : "Custom mode requires a non-empty .md prompt.",
+      },
+      { status: 400 },
+    );
+  }
+  if (localKaResponse && localKaResponse.length > 500000) {
+    return NextResponse.json(
+      { error: "Knowledge Assistant response is too large." },
+      { status: 413 },
     );
   }
 
@@ -51,7 +74,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: MCP_UNREACHABLE_MSG }, { status: 503 });
     }
     try {
-      const r = await generateStateless(provider, { question: message, mode, structured });
+      const generateOpts = {
+        question: message,
+        mode,
+        structured,
+        customPrompt,
+      };
+      const r =
+        provider === "ka" && localKaResponse
+          ? normalizeBridgedKaResponse(localKaResponse, generateOpts)
+          : await generateStateless(provider, generateOpts);
       const agg = await prisma.message.aggregate({
         where: { threadId },
         _max: { seqId: true },

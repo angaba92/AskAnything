@@ -10,20 +10,31 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as XLSX from "xlsx";
+import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
 
 export interface BatchRow {
   question: string;
   answer: string;
+  review: string;
+  reviewApproved: boolean;
   expert: string;
   sources: string;
+  sourceRow: number;
   status: "pending" | "running" | "done" | "error" | "skipped";
-  [key: string]: string;
 }
 
-export type BatchMode = "simple" | "detailed" | "bulleted" | "loopio";
-// MIGRACIÓN: "ka" (DY Knowledge Assistant) es el nuevo backend por defecto.
-// "agent" y "mcp" permanecen como backup ("DO NOT USE").
-export type BatchBackend = "ka" | "agent" | "mcp";
+export interface SpreadsheetColumn {
+  key: string;
+  index: number;
+  letter: string;
+  label: string;
+  display: string;
+}
+
+export type BatchMode = "simple" | "detailed" | "loopio" | "custom";
+// Fuentes visibles: KA remoto, biblioteca local o ambas combinadas.
+// Agent/MCP permanecen aceptados únicamente por compatibilidad interna.
+export type BatchBackend = "ka" | "local" | "hybrid" | "agent" | "mcp";
 
 interface BatchContextValue {
   rows: BatchRow[];
@@ -36,9 +47,19 @@ interface BatchContextValue {
   progress: number;
   error: string | null;
   doneCount: number;
-  columns: string[];
+  columns: SpreadsheetColumn[];
+  sheetNames: string[];
+  selectedSheet: string;
+  headerRow: number;
+  mappingOpen: boolean;
+  previewRows: string[][];
   questionCol: string;
   answerCol: string;
+  reviewCol: string;
+  newAnswerColumnName: string;
+  newReviewColumnName: string;
+  customPrompt: string;
+  customPromptFileName: string;
   fetching: boolean;
   startRow: number;
   setStartRow: (v: number) => void;
@@ -47,15 +68,58 @@ interface BatchContextValue {
   setBackend: (v: BatchBackend) => void;
   loadFile: (file: File) => void;
   loadFromUrl: (url: string) => Promise<void>;
+  setSelectedSheet: (name: string) => void;
+  setHeaderRow: (row: number) => void;
+  setMappingOpen: (open: boolean) => void;
   setQuestionCol: (c: string) => void;
   setAnswerCol: (c: string) => void;
+  setReviewCol: (c: string) => void;
+  setNewAnswerColumnName: (name: string) => void;
+  setNewReviewColumnName: (name: string) => void;
+  loadCustomPrompt: (file: File) => Promise<void>;
+  clearCustomPrompt: () => void;
+  applyMapping: () => void;
+  updateReview: (rowIndex: number, value: string) => void;
+  approveReview: (rowIndex: number) => void;
+  clearAllReviews: () => void;
   run: () => Promise<void>;
   stop: () => void;
   download: () => void;
 }
 
-const QUESTION_KEYS = ["question", "pregunta", "questions", "q", "prompt"];
-const ANSWER_KEYS = ["answer", "respuesta", "answers", "a", "response", "reply"];
+const QUESTION_KEYS = [
+  "question",
+  "pregunta",
+  "questions",
+  "q",
+  "prompt",
+  "requirement",
+  "requirements",
+  "requirement text",
+];
+const ANSWER_KEYS = [
+  "supplier response",
+  "answer",
+  "respuesta",
+  "answers",
+  "a",
+  "response",
+  "reply",
+];
+const REVIEW_KEYS = [
+  "needs review",
+  "review required",
+  "manual review",
+  "review notes",
+  "confidence review",
+];
+const DEFAULT_ANSWER_COLUMN = "Supplier Response";
+const DEFAULT_REVIEW_COLUMN = "Needs Review";
+
+interface SpreadsheetRawRow {
+  values: Record<string, string>;
+  sourceRow: number;
+}
 // Secciones DY entre las que rota el batch. Cada sección resuelve (server-side)
 // a un THREAD distinto y persistente. DY no ofrece reset de hilo, así que la
 // única forma de no saturar un hilo con cientos de mensajes es repartir las
@@ -81,9 +145,21 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [fetching, setFetching] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [columns, setColumns] = useState<string[]>([]);
+  const [columns, setColumns] = useState<SpreadsheetColumn[]>([]);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheetState] = useState("");
+  const [headerRow, setHeaderRowState] = useState(1);
+  const [mappingOpen, setMappingOpen] = useState(false);
+  const [previewRows, setPreviewRows] = useState<string[][]>([]);
   const [questionCol, setQuestionColState] = useState("");
   const [answerCol, setAnswerColState] = useState("");
+  const [reviewCol, setReviewColState] = useState("");
+  const [newAnswerColumnName, setNewAnswerColumnName] =
+    useState(DEFAULT_ANSWER_COLUMN);
+  const [newReviewColumnName, setNewReviewColumnName] =
+    useState(DEFAULT_REVIEW_COLUMN);
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [customPromptFileName, setCustomPromptFileName] = useState("");
   const [startRow, setStartRowState] = useState(1);
   const stopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -110,37 +186,154 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const contextRef = useRef("");
   const modeRef = useRef<BatchMode>("detailed");
   const backendRef = useRef<BatchBackend>("ka");
-  const rawRef = useRef<Record<string, unknown>[]>([]);
+  const workbookRef = useRef<XLSX.WorkBook | null>(null);
+  const rawRef = useRef<SpreadsheetRawRow[]>([]);
   const answerColRef = useRef("");
+  const reviewColRef = useRef("");
+  const selectedSheetRef = useRef("");
+  const headerRowRef = useRef(1);
   const startRowRef = useRef(1);
+  const customPromptRef = useRef("");
 
   rowsRef.current = rows;
   contextRef.current = context;
   modeRef.current = mode;
   backendRef.current = backend;
   answerColRef.current = answerCol;
+  reviewColRef.current = reviewCol;
+  selectedSheetRef.current = selectedSheet;
+  headerRowRef.current = headerRow;
   startRowRef.current = startRow;
+  customPromptRef.current = customPrompt;
 
-  function detectColumn(cols: string[], keys: string[]): string {
+  function columnKey(index: number): string {
+    return `c${index}`;
+  }
+
+  function normalized(value: unknown): string {
+    return String(value ?? "").trim().toLowerCase();
+  }
+
+  function detectColumn(
+    cols: SpreadsheetColumn[],
+    keys: string[],
+  ): string {
     return (
-      cols.find((c) => keys.includes(c.trim().toLowerCase())) ?? ""
+      cols.find((c) => keys.includes(normalized(c.label)))?.key ??
+      cols.find((c) =>
+        keys.some((key) => normalized(c.label).includes(key)),
+      )?.key ??
+      ""
     );
   }
 
+  function sheetMatrix(sheetName: string): string[][] {
+    const ws = workbookRef.current?.Sheets[sheetName];
+    if (!ws) return [];
+    return XLSX.utils.sheet_to_json<unknown[]>(ws, {
+      header: 1,
+      defval: "",
+      raw: false,
+    }).map((row) => row.map((cell) => String(cell ?? "")));
+  }
+
+  function headerScore(row: string[]): number {
+    const values = row.map(normalized);
+    let score = 0;
+    if (values.some((v) => QUESTION_KEYS.includes(v))) score += 6;
+    if (values.some((v) => ANSWER_KEYS.includes(v))) score += 5;
+    if (values.some((v) => v === "id")) score += 2;
+    if (values.some((v) => v === "theme" || v === "title")) score += 1;
+    return score;
+  }
+
+  function detectHeaderRow(matrix: string[][]): number {
+    let bestIndex = 0;
+    let bestScore = -1;
+    matrix.slice(0, 30).forEach((row, index) => {
+      const score = headerScore(row);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+    return bestIndex + 1;
+  }
+
+  function buildColumns(matrix: string[][], oneBasedHeaderRow: number) {
+    const rowIndex = Math.max(0, oneBasedHeaderRow - 1);
+    const maxColumns = Math.max(
+      matrix[rowIndex]?.length ?? 0,
+      ...matrix.slice(rowIndex, rowIndex + 8).map((row) => row.length),
+    );
+    return Array.from({ length: maxColumns }, (_, index) => {
+      const letter = XLSX.utils.encode_col(index);
+      const label = String(matrix[rowIndex]?.[index] ?? "").trim();
+      return {
+        key: columnKey(index),
+        index,
+        letter,
+        label,
+        display: `${letter} — ${label || "(empty)"}`,
+      };
+    });
+  }
+
+  function buildRawRows(
+    matrix: string[][],
+    oneBasedHeaderRow: number,
+    cols: SpreadsheetColumn[],
+  ): SpreadsheetRawRow[] {
+    return matrix.slice(oneBasedHeaderRow).map((row, offset) => ({
+      sourceRow: oneBasedHeaderRow + offset,
+      values: Object.fromEntries(
+        cols.map((col) => [col.key, String(row[col.index] ?? "")]),
+      ),
+    }));
+  }
+
+  function configureSheet(sheetName: string, requestedHeaderRow?: number) {
+    const matrix = sheetMatrix(sheetName);
+    const nextHeaderRow = Math.max(
+      1,
+      Math.min(requestedHeaderRow ?? detectHeaderRow(matrix), matrix.length || 1),
+    );
+    const nextColumns = buildColumns(matrix, nextHeaderRow);
+    const nextQuestion =
+      detectColumn(nextColumns, QUESTION_KEYS) ||
+      nextColumns.find((col) => col.label.trim())?.key ||
+      "";
+    const nextAnswer = detectColumn(nextColumns, ANSWER_KEYS);
+    const nextReview = detectColumn(nextColumns, REVIEW_KEYS);
+
+    setSelectedSheetState(sheetName);
+    setHeaderRowState(nextHeaderRow);
+    setColumns(nextColumns);
+    setQuestionColState(nextQuestion);
+    setAnswerColState(nextAnswer);
+    setReviewColState(nextReview);
+    setPreviewRows(matrix.slice(0, Math.min(matrix.length, nextHeaderRow + 6)));
+    rawRef.current = buildRawRows(matrix, nextHeaderRow, nextColumns);
+  }
+
   function buildRows(
-    raw: Record<string, unknown>[],
+    raw: SpreadsheetRawRow[],
     qCol: string,
     aCol: string,
+    rCol: string,
   ): BatchRow[] {
     return raw
-      .map((r) => {
-        const answer = aCol ? String(r[aCol] ?? "") : "";
+      .map((rawRow) => {
+        const answer = aCol ? String(rawRow.values[aCol] ?? "") : "";
+        const review = rCol ? String(rawRow.values[rCol] ?? "") : "";
         return {
-          ...r,
-          question: String(r[qCol] ?? "").trim(),
+          question: String(rawRow.values[qCol] ?? "").trim(),
           answer,
+          review,
+          reviewApproved: false,
           expert: "",
           sources: "",
+          sourceRow: rawRow.sourceRow,
           status: (answer.trim().length > 0 ? "skipped" : "pending") as
             | "pending"
             | "skipped",
@@ -151,30 +344,29 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
   function ingestArrayBuffer(buffer: ArrayBuffer, name: string) {
     const wb = XLSX.read(buffer, { type: "array" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
-      defval: "",
-    });
-    if (json.length === 0) {
-      setError("The sheet is empty.");
+    if (wb.SheetNames.length === 0) {
+      setError("The workbook has no sheets.");
       return;
     }
-    const cols = Object.keys(json[0]);
-    const qCol = detectColumn(cols, QUESTION_KEYS) || cols[0];
-    const aCol = detectColumn(cols, ANSWER_KEYS);
-
-    rawRef.current = json;
-    setColumns(cols);
-    setQuestionColState(qCol);
-    setAnswerColState(aCol);
+    workbookRef.current = wb;
+    setSheetNames(wb.SheetNames);
     setFileName(name);
-    const built = buildRows(json, qCol, aCol);
-    setRows(built);
-    const firstPending = built.findIndex((r) => r.status === "pending");
-    const startIdx = firstPending === -1 ? 0 : firstPending;
-    setStartRowState(Math.max(1, startIdx + 1));
+    setRows([]);
     setProgress(0);
     setError(null);
+    let bestSheet = wb.SheetNames[0];
+    let bestScore = -1;
+    for (const sheetName of wb.SheetNames) {
+      const matrix = sheetMatrix(sheetName);
+      const row = matrix[detectHeaderRow(matrix) - 1] ?? [];
+      const score = headerScore(row);
+      if (score > bestScore) {
+        bestScore = score;
+        bestSheet = sheetName;
+      }
+    }
+    configureSheet(bestSheet);
+    setMappingOpen(true);
   }
 
   function loadFile(file: File) {
@@ -228,22 +420,111 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     setStartRowState(clamped);
   }
 
+  function setSelectedSheet(name: string) {
+    if (!workbookRef.current?.Sheets[name]) return;
+    configureSheet(name);
+  }
+
+  function setHeaderRow(row: number) {
+    configureSheet(selectedSheetRef.current, row);
+  }
+
   function setQuestionCol(c: string) {
     setQuestionColState(c);
-    const built = buildRows(rawRef.current, c, answerColRef.current);
-    setRows(built);
-    const firstPending = built.findIndex((r) => r.status === "pending");
-    setStartRowState(Math.max(1, (firstPending === -1 ? 0 : firstPending) + 1));
-    setProgress(0);
   }
 
   function setAnswerCol(c: string) {
     setAnswerColState(c);
-    const built = buildRows(rawRef.current, questionCol, c);
+  }
+
+  function setReviewCol(c: string) {
+    setReviewColState(c);
+  }
+
+  function applyMapping() {
+    if (!questionCol) {
+      setError("Select the column containing the questions.");
+      return;
+    }
+    const built = buildRows(
+      rawRef.current,
+      questionCol,
+      answerColRef.current,
+      reviewColRef.current,
+    );
+    if (built.length === 0) {
+      setError(
+        "No questions were found with this mapping. Check the sheet, header row, and question column.",
+      );
+      return;
+    }
     setRows(built);
     const firstPending = built.findIndex((r) => r.status === "pending");
     setStartRowState(Math.max(1, (firstPending === -1 ? 0 : firstPending) + 1));
     setProgress(0);
+    setError(null);
+    setMappingOpen(false);
+  }
+
+  function updateReview(rowIndex: number, value: string) {
+    setRows((prev) => {
+      const next = [...prev];
+      if (next[rowIndex]) {
+        next[rowIndex] = {
+          ...next[rowIndex],
+          review: value,
+          reviewApproved: false,
+        };
+      }
+      return next;
+    });
+  }
+
+  function approveReview(rowIndex: number) {
+    setRows((prev) => {
+      const next = [...prev];
+      if (next[rowIndex]) {
+        next[rowIndex] = { ...next[rowIndex], reviewApproved: true };
+      }
+      return next;
+    });
+  }
+
+  function clearAllReviews() {
+    setRows((prev) =>
+      prev.map((row) => ({ ...row, review: "", reviewApproved: false })),
+    );
+  }
+
+  async function loadCustomPrompt(file: File) {
+    if (!/\.md$/i.test(file.name)) {
+      setError("Custom instructions must be uploaded as a .md file.");
+      return;
+    }
+    const text = await file.text();
+    if (!text.trim()) {
+      setError("The custom prompt file is empty.");
+      return;
+    }
+    const trimmed = text.trim();
+    if (trimmed.length > MAX_CUSTOM_PROMPT_CHARS) {
+      setError(
+        `Custom prompt is too long: ${trimmed.length.toLocaleString()} characters. ` +
+          `The configured maximum is ${MAX_CUSTOM_PROMPT_CHARS.toLocaleString()}. Shorten the .md and upload it again.`,
+      );
+      setCustomPrompt("");
+      setCustomPromptFileName("");
+      return;
+    }
+    setCustomPrompt(trimmed);
+    setCustomPromptFileName(file.name);
+    setError(null);
+  }
+
+  function clearCustomPrompt() {
+    setCustomPrompt("");
+    setCustomPromptFileName("");
+    if (modeRef.current === "custom") setMode("detailed");
   }
 
   async function run() {
@@ -281,7 +562,12 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     // KA (por defecto) y el agente son rápidos (~1-2s) → pausa corta. El backend
     // MCP (get_dy_knowledge) es lento (~25-40s) y se rate-limita tras ~2 llamadas
     // seguidas: le damos una pausa base mucho mayor entre filas.
-    const BASE_DELAY = backendRef.current === "mcp" ? 30000 : 1200;
+    const BASE_DELAY =
+      backendRef.current === "mcp"
+        ? 30000
+        : backendRef.current === "local"
+          ? 100
+          : 1200;
     let consecutiveErrors = 0;
 
     // Procesa una fila. Devuelve "done" | "error" | "stopped".
@@ -307,6 +593,11 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
             backend: backendRef.current,
             sectionId: section,
             threadId: sectionThreads.current[section] ?? undefined,
+            confidenceReview: true,
+            customPrompt:
+              modeRef.current === "custom"
+                ? customPromptRef.current
+                : undefined,
           }),
           signal: controller.signal,
         });
@@ -327,14 +618,16 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         rotation.current += 1;
         setRows((prev) => {
           const next = [...prev];
-          const writeCol = answerColRef.current;
           next[i] = {
             ...next[i],
             answer: data.answer,
+            review: data.reviewRequired
+              ? String(data.reviewReason || "Manual review required.")
+              : "",
+            reviewApproved: false,
             expert: data.expert,
             sources: data.tools,
             status: "done",
-            ...(writeCol ? { [writeCol]: data.answer } : {}),
           };
           return next;
         });
@@ -358,6 +651,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           next[i] = {
             ...next[i],
             answer: "ERROR: " + (err as Error).message,
+            review: "Request failed and requires manual review.",
+            reviewApproved: false,
             status: "error",
           };
           return next;
@@ -497,23 +792,61 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   }
 
   function download() {
-    const out = rowsRef.current.map((r) => ({
-      question: r.question,
-      answer: r.answer,
-      expert: r.expert,
-      sources: r.sources,
-      status: r.status,
-    }));
-    const ws = XLSX.utils.json_to_sheet(out);
-    ws["!cols"] = [
-      { wch: 40 },
-      { wch: 80 },
-      { wch: 16 },
-      { wch: 20 },
-      { wch: 10 },
-    ];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "answers");
+    const wb = workbookRef.current;
+    const sheetName = selectedSheetRef.current;
+    const ws = wb?.Sheets[sheetName];
+    if (!wb || !ws) {
+      setError("The original workbook is no longer available. Reload the file.");
+      return;
+    }
+
+    const existingColumns = columns;
+    const nextColumnIndex =
+      existingColumns.length > 0
+        ? Math.max(...existingColumns.map((col) => col.index)) + 1
+        : 0;
+    const answerIndex = answerColRef.current
+      ? existingColumns.find((col) => col.key === answerColRef.current)?.index
+      : nextColumnIndex;
+    const reviewIndex = reviewColRef.current
+      ? existingColumns.find((col) => col.key === reviewColRef.current)?.index
+      : nextColumnIndex + (answerColRef.current ? 0 : 1);
+
+    if (answerIndex === undefined || reviewIndex === undefined) {
+      setError("The mapped output columns are invalid. Reopen column mapping.");
+      return;
+    }
+
+    if (!answerColRef.current) {
+      XLSX.utils.sheet_add_aoa(ws, [[newAnswerColumnName.trim() || DEFAULT_ANSWER_COLUMN]], {
+        origin: { r: headerRowRef.current - 1, c: answerIndex },
+      });
+    }
+    if (!reviewColRef.current) {
+      XLSX.utils.sheet_add_aoa(ws, [[newReviewColumnName.trim() || DEFAULT_REVIEW_COLUMN]], {
+        origin: { r: headerRowRef.current - 1, c: reviewIndex },
+      });
+    }
+
+    for (const row of rowsRef.current) {
+      XLSX.utils.sheet_add_aoa(ws, [[row.answer]], {
+        origin: { r: row.sourceRow, c: answerIndex },
+      });
+      const exportedReview = row.reviewApproved
+        ? row.review.trim()
+          ? `Approved — ${row.review.trim()}`
+          : "Approved"
+        : row.review;
+      XLSX.utils.sheet_add_aoa(ws, [[exportedReview]], {
+        origin: { r: row.sourceRow, c: reviewIndex },
+      });
+    }
+
+    const widths = ws["!cols"] ?? [];
+    widths[answerIndex] = { ...(widths[answerIndex] ?? {}), wch: 80 };
+    widths[reviewIndex] = { ...(widths[reviewIndex] ?? {}), wch: 45 };
+    ws["!cols"] = widths;
+
     // El export siempre es .xlsx; quitamos cualquier extensión soportada de origen.
     XLSX.writeFile(wb, fileName.replace(/\.(xlsx|xls|csv|ods)$/i, "") + "_answered.xlsx");
   }
@@ -534,8 +867,18 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     error,
     doneCount,
     columns,
+    sheetNames,
+    selectedSheet,
+    headerRow,
+    mappingOpen,
+    previewRows,
     questionCol,
     answerCol,
+    reviewCol,
+    newAnswerColumnName,
+    newReviewColumnName,
+    customPrompt,
+    customPromptFileName,
     fetching,
     startRow,
     setStartRow,
@@ -544,8 +887,20 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     setBackend,
     loadFile,
     loadFromUrl,
+    setSelectedSheet,
+    setHeaderRow,
+    setMappingOpen,
     setQuestionCol,
     setAnswerCol,
+    setReviewCol,
+    setNewAnswerColumnName,
+    setNewReviewColumnName,
+    loadCustomPrompt,
+    clearCustomPrompt,
+    applyMapping,
+    updateReview,
+    approveReview,
+    clearAllReviews,
     run,
     stop,
     download,

@@ -1,14 +1,27 @@
 {
   "manifest_version": 3,
-  "name": "AskAnything · DY session capture",
-  "version": "1.0.0",
-  "description": "Captures your Dynamic Yield session cookie (incl. HttpOnly) and pushes it to the AskAnything app, so the team's shared session stays fresh without copying cURL.",
+  "name": "AskAnything · Corporate bridge",
+  "version": "1.1.0",
+  "description": "Connects AskAnything to VPN-only Dynamic Yield services and can refresh the legacy DY session.",
   "permissions": ["cookies", "storage"],
   "host_permissions": [
     "https://adm.dynamicyield.com/*",
     "https://*.dynamicyield.com/*",
+    "https://dy-knowledge-assistant.use1.dev.dydy.io/*",
+    "https://ask-anything-steel.vercel.app/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://ask-anything-steel.vercel.app/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
   ],
   "action": {
     "default_title": "Capture DY session",

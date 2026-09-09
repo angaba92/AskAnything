@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useBatch } from "@/components/BatchProvider";
 import { ANSWER_MODES, MODE_LABELS, MODE_HINTS } from "@/lib/promptMapping";
+import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
 
 export default function BatchPage() {
   const {
@@ -17,8 +18,18 @@ export default function BatchPage() {
     error,
     doneCount,
     columns,
+    sheetNames,
+    selectedSheet,
+    headerRow,
+    mappingOpen,
+    previewRows,
     questionCol,
     answerCol,
+    reviewCol,
+    newAnswerColumnName,
+    newReviewColumnName,
+    customPrompt,
+    customPromptFileName,
     fetching,
     startRow,
     setStartRow,
@@ -27,8 +38,20 @@ export default function BatchPage() {
     setBackend,
     loadFile,
     loadFromUrl,
+    setSelectedSheet,
+    setHeaderRow,
+    setMappingOpen,
     setQuestionCol,
     setAnswerCol,
+    setReviewCol,
+    setNewAnswerColumnName,
+    setNewReviewColumnName,
+    loadCustomPrompt,
+    clearCustomPrompt,
+    applyMapping,
+    updateReview,
+    approveReview,
+    clearAllReviews,
     run,
     stop,
     download,
@@ -36,6 +59,9 @@ export default function BatchPage() {
 
   const [url, setUrl] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const reviewCount = rows.filter(
+    (row) => row.review.trim() && !row.reviewApproved,
+  ).length;
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -58,6 +84,202 @@ export default function BatchPage() {
 
   return (
     <div className="mx-auto max-w-5xl p-6">
+      {mappingOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mapping-title"
+            className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+          >
+            <div className="flex items-start justify-between border-b border-gray-200 px-5 py-4">
+              <div>
+                <h2 id="mapping-title" className="text-lg font-semibold text-gray-900">
+                  Map spreadsheet columns
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  Choose the worksheet and the row containing the real headers. Column
+                  letters are shown so empty or duplicated headers remain selectable.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMappingOpen(false)}
+                className="rounded-lg px-2 py-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                aria-label="Close mapping"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid gap-4 border-b border-gray-200 bg-gray-50 p-5 md:grid-cols-5">
+              <label className="md:col-span-2">
+                <span className="mb-1 block text-xs font-medium text-gray-600">
+                  Worksheet
+                </span>
+                <select
+                  value={selectedSheet}
+                  onChange={(e) => setSelectedSheet(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                >
+                  {sheetNames.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-medium text-gray-600">
+                  Header row
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={headerRow}
+                  onChange={(e) => setHeaderRow(Number(e.target.value) || 1)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                />
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-medium text-gray-600">
+                  Question column
+                </span>
+                <select
+                  value={questionCol}
+                  onChange={(e) => setQuestionCol(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                >
+                  <option value="">Select…</option>
+                  {columns.map((column) => (
+                    <option key={column.key} value={column.key}>
+                      {column.display}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-medium text-gray-600">
+                  Answer column
+                </span>
+                <select
+                  value={answerCol}
+                  onChange={(e) => setAnswerCol(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                >
+                  <option value="">Create a new column</option>
+                  {columns.map((column) => (
+                    <option key={column.key} value={column.key}>
+                      {column.display}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {!answerCol && (
+                <label className="md:col-start-4">
+                  <span className="mb-1 block text-xs font-medium text-gray-600">
+                    New answer column name
+                  </span>
+                  <input
+                    value={newAnswerColumnName}
+                    onChange={(e) => setNewAnswerColumnName(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                  />
+                </label>
+              )}
+              <label className={answerCol ? "md:col-start-4" : ""}>
+                <span className="mb-1 block text-xs font-medium text-gray-600">
+                  Review column
+                </span>
+                <select
+                  value={reviewCol}
+                  onChange={(e) => setReviewCol(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                >
+                  <option value="">Create a new column</option>
+                  {columns.map((column) => (
+                    <option key={column.key} value={column.key}>
+                      {column.display}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {!reviewCol && (
+                <label>
+                  <span className="mb-1 block text-xs font-medium text-gray-600">
+                    New review column name
+                  </span>
+                  <input
+                    value={newReviewColumnName}
+                    onChange={(e) => setNewReviewColumnName(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                  />
+                </label>
+              )}
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto p-5">
+              <p className="mb-2 text-xs font-medium text-gray-600">
+                Worksheet preview — selected header row highlighted
+              </p>
+              <table className="min-w-full border-collapse text-xs">
+                <tbody>
+                  {previewRows.map((row, rowIndex) => (
+                    <tr
+                      key={rowIndex}
+                      className={
+                        rowIndex === headerRow - 1
+                          ? "bg-brand/10 font-semibold text-brand-dark"
+                          : "text-gray-600"
+                      }
+                    >
+                      <td className="sticky left-0 border border-gray-200 bg-gray-50 px-2 py-1 text-gray-400">
+                        {rowIndex + 1}
+                      </td>
+                      {columns.map((column) => (
+                        <td
+                          key={column.key}
+                          className="max-w-xs truncate border border-gray-200 px-2 py-1"
+                          title={row[column.index] ?? ""}
+                        >
+                          <span className="mr-1 text-[10px] text-gray-400">
+                            {column.letter}
+                          </span>
+                          {row[column.index] || "—"}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-gray-200 px-5 py-4">
+              <span className="text-xs text-gray-500">
+                Header rows are auto-detected per worksheet; verify the highlighted
+                row in the preview before applying.
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMappingOpen(false)}
+                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={applyMapping}
+                  disabled={!questionCol}
+                  className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
+                >
+                  Apply mapping
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-brand-dark">Bulk import</h1>
         <Link href="/" className="text-sm text-brand hover:underline">
@@ -113,10 +335,64 @@ export default function BatchPage() {
           <span className="text-[11px] text-gray-400">{MODE_HINTS[mode]}</span>
         </div>
 
+        {mode === "custom" && (
+          <div className="rounded-lg border border-brand/30 bg-brand/5 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-gray-800">
+                  Custom system instructions
+                </p>
+                <p className="text-xs text-gray-500">
+                  The uploaded Markdown replaces all built-in style instructions and
+                  response guardrails for this mode. Maximum{" "}
+                  {MAX_CUSTOM_PROMPT_CHARS.toLocaleString()} characters. Custom adds
+                  no hidden guardrails or confidence metadata.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="cursor-pointer rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-brand-dark">
+                  Upload .md
+                  <input
+                    type="file"
+                    accept=".md,text/markdown"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void loadCustomPrompt(file);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+                {customPrompt && (
+                  <button
+                    type="button"
+                    onClick={clearCustomPrompt}
+                    className="rounded-lg border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+            {customPrompt ? (
+              <details className="mt-3">
+                <summary className="cursor-pointer text-xs font-medium text-brand">
+                  {customPromptFileName} · {customPrompt.length.toLocaleString()} characters
+                </summary>
+                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-3 text-xs text-gray-600">
+                  {customPrompt}
+                </pre>
+              </details>
+            ) : (
+              <p className="mt-3 text-xs font-medium text-amber-700">
+                Upload a non-empty .md file before starting.
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium">Backend:</span>
-          {/* MIGRACIÓN: KA es el nuevo por defecto (recomendado). Agent y MCP
-              se mantienen disponibles pero marcados "DO NOT USE" (backup). */}
+          <span className="text-sm font-medium">Knowledge source:</span>
           <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
             <button
               type="button"
@@ -130,38 +406,39 @@ export default function BatchPage() {
             </button>
             <button
               type="button"
-              onClick={() => setBackend("agent")}
+              onClick={() => setBackend("local")}
               disabled={running}
-              title="Deprecated — backup only. Do not use."
               className={`border-l border-gray-300 px-2.5 py-1 disabled:opacity-60 ${
-                backend === "agent"
-                  ? "bg-red-600 text-white"
-                  : "bg-white text-gray-400 line-through hover:bg-gray-50"
+                backend === "local"
+                  ? "bg-brand text-white"
+                  : "bg-white text-gray-600 hover:bg-gray-50"
               }`}
             >
-              Agent · DO NOT USE
+              Local Library
             </button>
             <button
               type="button"
-              onClick={() => setBackend("mcp")}
+              onClick={() => setBackend("hybrid")}
               disabled={running}
-              title="Deprecated — backup only. Do not use."
               className={`border-l border-gray-300 px-2.5 py-1 disabled:opacity-60 ${
-                backend === "mcp"
-                  ? "bg-red-600 text-white"
-                  : "bg-white text-gray-400 line-through hover:bg-gray-50"
+                backend === "hybrid"
+                  ? "bg-brand text-white"
+                  : "bg-white text-gray-600 hover:bg-gray-50"
               }`}
             >
-              MCP · DO NOT USE
+              Hybrid
             </button>
           </div>
           <span className="text-[11px] text-gray-400">
             {backend === "ka"
-              ? "DY Knowledge Assistant — grounded, cited answers (recommended, works on Vercel)"
-              : backend === "mcp"
-              ? "Backup only · corporate network — run locally, not on Vercel"
-              : "Backup only · Experience OS agent · rotates DY sections/threads"}
+              ? "Uses the Dynamic Yield Knowledge Assistant."
+              : backend === "local"
+                ? "Returns the closest approved answer stored under Knowledge Base."
+                : "Uses local approved answers as evidence for the Knowledge Assistant (recommended)."}
           </span>
+          <Link href="/kb" className="text-xs font-medium text-brand hover:underline">
+            Manage library
+          </Link>
         </div>
 
         {/* Source: drag & drop / upload OR OneDrive link */}
@@ -233,45 +510,26 @@ export default function BatchPage() {
           </p>
         </div>
 
-        {/* Column mapping (shown once a file is loaded) */}
         {columns.length > 0 && (
-          <div className="flex flex-wrap items-end gap-4 rounded-lg border border-gray-200 bg-white p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600">
-                Question column
-              </label>
-              <select
-                value={questionCol}
-                onChange={(e) => setQuestionCol(e.target.value)}
-                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none"
-              >
-                {columns.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+              <p className="text-sm font-medium text-gray-700">
+                {selectedSheet} · header row {headerRow}
+              </p>
+              <p className="text-xs text-gray-400">
+                Question: {columns.find((c) => c.key === questionCol)?.display ?? "not selected"} ·
+                Answer: {columns.find((c) => c.key === answerCol)?.display ?? `new “${newAnswerColumnName}”`} ·
+                Review: {columns.find((c) => c.key === reviewCol)?.display ?? `new “${newReviewColumnName}”`}
+              </p>
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600">
-                Answer column (where answers are written)
-              </label>
-              <select
-                value={answerCol}
-                onChange={(e) => setAnswerCol(e.target.value)}
-                className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-brand focus:outline-none"
-              >
-                <option value="">New “answer” column</option>
-                {columns.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <span className="pb-1.5 text-[11px] text-gray-400">
-              Auto-detected — change if your template uses different headers.
-            </span>
+            <button
+              type="button"
+              onClick={() => setMappingOpen(true)}
+              disabled={running}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+            >
+              Configure mapping
+            </button>
           </div>
         )}
 
@@ -306,7 +564,9 @@ export default function BatchPage() {
           ) : (
             <button
               onClick={run}
-              disabled={rows.length === 0}
+              disabled={
+                rows.length === 0 || (mode === "custom" && !customPrompt.trim())
+              }
               className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
             >
               Start
@@ -319,6 +579,29 @@ export default function BatchPage() {
           >
             Download .xlsx
           </button>
+          {reviewCount > 0 && (
+            <>
+              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+                {reviewCount} need review
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Clear every review flag in the current batch? This cannot be undone.",
+                    )
+                  ) {
+                    clearAllReviews();
+                  }
+                }}
+                disabled={running}
+                className="rounded-lg border border-amber-300 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50"
+              >
+                Clear all review flags
+              </button>
+            </>
+          )}
         </div>
 
         {rows.length > 0 && (
@@ -333,13 +616,14 @@ export default function BatchPage() {
 
       {rows.length > 0 && (
         <div className="mt-5 overflow-x-auto rounded-xl border border-gray-200 bg-white">
-          <table className="w-full text-left text-sm">
+          <table className="w-full table-fixed text-left text-sm">
             <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase text-gray-500">
               <tr>
-                <th className="w-8 p-2">#</th>
-                <th className="p-2">Question</th>
-                <th className="p-2">Answer</th>
-                <th className="w-24 p-2">Status</th>
+                <th className="w-10 p-2">#</th>
+                <th className="w-[25%] p-2">Question</th>
+                <th className="w-[39%] p-2">Answer</th>
+                <th className="w-[28%] p-2">Needs Review</th>
+                <th className="w-[8%] p-2">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -349,6 +633,50 @@ export default function BatchPage() {
                   <td className="p-2">{r.question}</td>
                   <td className="whitespace-pre-wrap p-2 text-gray-700">
                     {r.answer}
+                  </td>
+                  <td className="p-3">
+                    <div
+                      className={`rounded-xl border p-2 ${
+                        r.reviewApproved
+                          ? "border-green-300 bg-green-50"
+                          : r.review
+                            ? "border-amber-300 bg-amber-50"
+                            : "border-gray-200 bg-white"
+                      }`}
+                    >
+                      <textarea
+                        value={r.review}
+                        onChange={(e) => updateReview(i, e.target.value)}
+                        placeholder="No review required"
+                        rows={5}
+                        className="w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-brand focus:outline-none"
+                      />
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <span
+                          className={`text-xs font-medium ${
+                            r.reviewApproved
+                              ? "text-green-700"
+                              : r.review
+                                ? "text-amber-800"
+                                : "text-gray-400"
+                          }`}
+                        >
+                          {r.reviewApproved
+                            ? "Approved"
+                            : r.review
+                              ? "Pending approval"
+                              : "No review flag"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => approveReview(i)}
+                          disabled={!r.review.trim() || r.reviewApproved}
+                          className="rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          ✓ Approve
+                        </button>
+                      </div>
+                    </div>
                   </td>
                   <td className="p-2">
                     <span

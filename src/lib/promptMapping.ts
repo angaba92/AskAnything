@@ -16,15 +16,39 @@
  */
 
 import type { AnswerMode } from "./promptTemplate";
+import {
+  CLIENT_FACING_RFP_POLICY,
+  CONFIDENCE_REVIEW_INSTRUCTION,
+  clientFacingFallback,
+  extractConfidenceReview,
+  hasNonClientFacingLanguage,
+  isClarificationRequest,
+  separateReviewLimitations,
+  stripNonClientFacingPreamble,
+  stripNonClientFacingPassages,
+} from "./responsePolicy";
 
 export type { AnswerMode };
+/** Límite solicitado para el archivo; KA aplica su límite al payload completo. */
+export const MAX_CUSTOM_PROMPT_CHARS = 8000;
+export {
+  clientFacingFallback,
+  extractConfidenceReview,
+  hasNonClientFacingLanguage,
+  isClarificationRequest,
+  separateReviewLimitations,
+  stripNonClientFacingPreamble,
+  stripNonClientFacingPassages,
+};
 
 /** Todos los modos disponibles, en el orden en que se muestran en la UI. */
-export const ANSWER_MODES: AnswerMode[] = [
+export type VisibleAnswerMode = Exclude<AnswerMode, "bulleted">;
+
+export const ANSWER_MODES: VisibleAnswerMode[] = [
   "detailed",
-  "bulleted",
   "loopio",
   "simple",
+  "custom",
 ];
 
 /** Etiqueta corta de cada modo (botón del selector de estilo). */
@@ -33,6 +57,7 @@ export const MODE_LABELS: Record<AnswerMode, string> = {
   bulleted: "Detailed (bullets)",
   loopio: "Loopio (RFP)",
   simple: "Simple",
+  custom: "Custom",
 };
 
 /** Pista descriptiva de cada modo (texto auxiliar junto al selector). */
@@ -41,6 +66,7 @@ export const MODE_HINTS: Record<AnswerMode, string> = {
   bulleted: "Summary · bullet Details · Example · References",
   loopio: "Verdict · themed sections · example · source (RFP style)",
   simple: "Short, direct answer",
+  custom: "Uses your uploaded .md instructions instead of built-in guardrails",
 };
 
 /**
@@ -53,13 +79,14 @@ export const MODE_HINTS: Record<AnswerMode, string> = {
 const KA_STYLE_INSTRUCTIONS: Record<AnswerMode, string | null> = {
   // "simple" no lleva estructura: prosa breve y directa (ideal para celdas).
   simple:
-    'Answer ONLY in 1-2 plain sentences. No headings, no markdown, no bullet points, no "Sources" section.',
+    'Answer in 1-2 direct plain sentences, followed by a final line starting "Sources: " with the full supporting URL(s) separated by "; ". No headings, bullets, or Markdown. Omit the Sources line only if no URL is available.',
   detailed:
     'Answer in plain prose (no markdown headings, no bullet points). Start with one paragraph that answers directly, then 3-4 paragraphs of depth, then one paragraph with a concrete real-world example. Finish with a single line "Sources: " listing the full URL(s) separated by "; " (omit the line if you have none).',
   bulleted:
     'Answer in plain text. Start with 1-2 sentences that answer directly. Then 4-7 bullets, each on its own line starting with "\u2022 " and self-contained (a couple of sentences is fine). Then a short paragraph starting "As an example, ". Finish with a single line "Sources: " listing the full URL(s) separated by "; " (omit the line if you have none).',
   loopio:
-    'Answer in RFP style, plain text, using "\u2022 " for bullets. 1) A one-sentence verdict starting with "Yes." or "No." or "Partially." then "Mastercard Dynamic Yield " and the essence. 2) One or more short themed sections: each a 2-4 word Title Case heading on its own line (no colon, no markdown), followed by "\u2022 " bullets. 3) A paragraph starting "For example, ". 4) A closing line starting "For more information, please refer to our " with the resource name and its full URL in parentheses (omit if you have none).',
+    'Answer in client-facing Loopio RFP style using plain text. Begin with one positive, direct paragraph about supported Mastercard Dynamic Yield capabilities. Start with "Yes." only when it naturally and fully answers a yes/no question; never force it, and NEVER begin with "No." or "Partially.". Add one or more short 2-4 word Title Case themed headings with no colon or Markdown, followed by concrete "\u2022 " bullets. Add a concise practical example when relevant. Finish with an optional line beginning "For more information, please refer to our " followed by named resources and full URLs. NEVER add a final limitation, caveat, documentation-gap, validation, NDA, or due-diligence paragraph. Put every such detail only in CONFIDENCE_REVIEW.',
+  custom: null,
 };
 
 /** Devuelve la instrucción de estilo del KA para un modo (null en "simple"
@@ -74,10 +101,39 @@ export function kaStyleInstruction(mode: AnswerMode): string | null {
  */
 export function buildKaUserContent(
   question: string,
-  opts: { mode: AnswerMode; context?: string } = { mode: "detailed" }
+  opts: {
+    mode: AnswerMode;
+    context?: string;
+    confidenceReview?: boolean;
+    customPrompt?: string;
+  } = {
+    mode: "detailed",
+  }
 ): string {
-  const context = opts.context?.trim() ? `${opts.context.trim()}\n\n` : "";
+  const context = opts.context?.trim()
+    ? `\n\nSupporting context:\n${opts.context.trim()}`
+    : "";
   const instruction = kaStyleInstruction(opts.mode);
   const q = question.trim();
-  return instruction ? `${context}${q}\n\n${instruction}` : `${context}${q}`;
+  const style = instruction ? `\n\n${instruction}` : "";
+  // La política va AL FINAL para darle máxima prioridad por recencia, en todos
+  // los modos. Así el KA no expone búsquedas, gaps documentales ni equipos internos.
+  const confidence = opts.confidenceReview
+    ? `\n\n${CONFIDENCE_REVIEW_INSTRUCTION}`
+    : "";
+  if (opts.mode === "custom") {
+    const customPrompt = opts.customPrompt?.trim();
+    if (!customPrompt) {
+      throw new Error("Custom mode requires an uploaded .md prompt.");
+    }
+    if (customPrompt.length > MAX_CUSTOM_PROMPT_CHARS) {
+      throw new Error(
+        `Custom prompt is too long (${customPrompt.length.toLocaleString()} characters). Maximum: ${MAX_CUSTOM_PROMPT_CHARS.toLocaleString()}.`,
+      );
+    }
+    // Custom sustituye ABSOLUTAMENTE toda nuestra capa: tampoco añadimos metadata
+    // de confianza, que ocupaba ~1K y hacía fallar prompts cercanos a 8K.
+    return `Question:\n${q}${context}\n\n${customPrompt}`;
+  }
+  return `Question:\n${q}${context}${style}\n\n${CLIENT_FACING_RFP_POLICY}${confidence}`;
 }

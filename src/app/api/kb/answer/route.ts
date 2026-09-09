@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     source: h.source,
     kind: h.kind,
     question: h.question,
-    score: Number(h.score.toFixed(3)),
+    score: Number(h.confidence.toFixed(3)),
     preview: h.text.slice(0, 200),
   }));
 
