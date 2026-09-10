@@ -4,22 +4,9 @@ import { prisma } from "@/lib/db";
 import { createThread, DyAuthError } from "@/lib/dyClient";
 import { nextChatSection } from "@/lib/sections";
 import { isStateless, resolveProvider } from "@/lib/providers";
+import { requestUser } from "@/lib/requestUser";
 
 export const dynamic = "force-dynamic";
-
-/** Extrae el usuario del header Basic Auth (el login del middleware). */
-function authUser(req: Request): string | null {
-  const header = req.headers.get("authorization");
-  if (!header?.startsWith("Basic ")) return null;
-  try {
-    const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
-    const idx = decoded.indexOf(":");
-    const user = (idx > 0 ? decoded.slice(0, idx) : decoded).trim();
-    return user || null;
-  } catch {
-    return null;
-  }
-}
 
 /** POST /api/threads/new { backend? }
  * KA/MCP crean un hilo exclusivamente local. Agent Mode conserva el flujo
@@ -27,7 +14,7 @@ function authUser(req: Request): string | null {
  */
 export async function POST(req: Request) {
   try {
-    const owner = authUser(req);
+    const owner = requestUser(req);
     const body = (await req.json().catch(() => ({}))) as { backend?: string };
     const provider = resolveProvider(body.backend);
 

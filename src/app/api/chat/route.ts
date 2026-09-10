@@ -8,6 +8,7 @@ import { normalizeBridgedKaResponse } from "@/lib/providers/ka";
 import { KaError } from "@/lib/kaClient";
 import { McpError, isMcpReachableEnv, MCP_UNREACHABLE_MSG } from "@/lib/mcpClient";
 import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
+import { requestUser } from "@/lib/requestUser";
 
 export const dynamic = "force-dynamic";
 
@@ -54,15 +55,19 @@ export async function POST(req: NextRequest) {
   }
 
   // Aseguramos que el thread exista localmente y le damos título si aún es el por defecto.
-  const existing = await prisma.thread.findUnique({ where: { id: threadId } });
-  await prisma.thread.upsert({
-    where: { id: threadId },
-    create: { id: threadId, title: message.slice(0, 60) },
-    update:
-      !existing || existing.title === "New conversation"
-        ? { title: message.slice(0, 60) }
-        : {},
+  const owner = requestUser(req);
+  const existing = await prisma.thread.findFirst({
+    where: { id: threadId, owner },
   });
+  if (!existing) {
+    return NextResponse.json({ error: "Thread not found" }, { status: 404 });
+  }
+  if (existing.title === "New conversation") {
+    await prisma.thread.update({
+      where: { id: threadId },
+      data: { title: message.slice(0, 60) },
+    });
+  }
 
   // MIGRACIÓN: proveedor por defecto "ka" (DY Knowledge Assistant). Los
   // proveedores stateless (KA por defecto; MCP como backup "DO NOT USE") NO usan

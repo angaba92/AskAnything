@@ -92,11 +92,6 @@ export default function Sidebar({
                 {STATUS_LABEL[t.status]}
               </span>
             </div>
-            {t.owner && (
-              <p className="mt-0.5 truncate text-[10px] font-medium text-brand">
-                👤 {t.owner}
-              </p>
-            )}
             <p className="mt-1 truncate text-xs text-gray-400">
               {t.lastMessage}
             </p>

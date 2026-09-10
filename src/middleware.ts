@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authenticatedUserHeader } from "@/lib/requestUser";
 
 const AUTH_REALM_BASE = "AskAnything internal demo";
 const FORCE_REAUTH_COOKIE = "aa_force_reauth";
@@ -74,7 +75,11 @@ function unauthorizedResponse(req: NextRequest, realm: string, clearReauth: bool
 export function middleware(req: NextRequest) {
   const creds = loadCredentials();
 
-  if (creds.size === 0) return NextResponse.next();
+  if (creds.size === 0) {
+    const headers = new Headers(req.headers);
+    headers.set(authenticatedUserHeader(), "local");
+    return NextResponse.next({ request: { headers } });
+  }
 
   const forceReauth = req.cookies.get(FORCE_REAUTH_COOKIE)?.value;
   if (forceReauth) {
@@ -92,7 +97,11 @@ export function middleware(req: NextRequest) {
       const idx = decoded.indexOf(":");
       const u = normalizeToken(decoded.slice(0, idx));
       const p = normalizeToken(decoded.slice(idx + 1));
-      if (creds.get(u) === p) return NextResponse.next();
+      if (creds.get(u) === p) {
+        const headers = new Headers(req.headers);
+        headers.set(authenticatedUserHeader(), u);
+        return NextResponse.next({ request: { headers } });
+      }
     } catch {
       // fall through to 401
     }

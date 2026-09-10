@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getThread, DyAuthError } from "@/lib/dyClient";
 import { persistMessages, deriveTitle } from "@/lib/persist";
+import { requestUser } from "@/lib/requestUser";
 
 export const dynamic = "force-dynamic";
 
@@ -16,9 +17,10 @@ export async function GET(
 ) {
   const { id } = params;
   const sync = req.nextUrl.searchParams.get("sync");
+  const owner = requestUser(req);
 
-  let thread = await prisma.thread.findUnique({
-    where: { id },
+  let thread = await prisma.thread.findFirst({
+    where: { id, owner },
     include: { messages: { orderBy: { seqId: "asc" } } },
   });
   if (!thread) {
@@ -35,8 +37,8 @@ export async function GET(
       if (title) {
         await prisma.thread.update({ where: { id }, data: { title } }).catch(() => {});
       }
-      thread = await prisma.thread.findUniqueOrThrow({
-        where: { id },
+      thread = await prisma.thread.findFirstOrThrow({
+        where: { id, owner },
         include: { messages: { orderBy: { seqId: "asc" } } },
       });
     }
