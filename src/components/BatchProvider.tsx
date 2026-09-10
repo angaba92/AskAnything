@@ -672,27 +672,71 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         }
         // Sección (y por tanto hilo) de esta pregunta. Rotamos en cada intento.
         const section = BATCH_SECTIONS[rotation.current % BATCH_SECTIONS.length];
-        const res = await fetch("/api/ask", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            question,
-            context: contextRef.current,
+        const askApi = async (bridgedResponse?: string) => {
+          const response = await fetch("/api/ask", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              question,
+              context: contextRef.current,
+              mode: modeRef.current,
+              backend: backendRef.current,
+              sectionId: section,
+              threadId: sectionThreads.current[section] ?? undefined,
+              confidenceReview: true,
+              customPrompt:
+                modeRef.current === "custom"
+                  ? customPromptRef.current
+                  : undefined,
+              localKaResponse: bridgedResponse,
+            }),
+            signal: controller.signal,
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error ?? "Error");
+          return payload;
+        };
+
+        let data = await askApi(localKaResponse);
+        if (
+          useCorporateBridge &&
+          modeRef.current !== "custom" &&
+          data.needsRecovery
+        ) {
+          const firstReview = String(data.reviewReason ?? "").trim();
+          const recoveryQuestion = `${question}
+
+IMPORTANT FOR THIS BULK RFP ITEM: The previous draft did not contain a usable substantive answer. Answer the original question now with the BEST POSSIBLE positive, client-facing response.
+
+Mandatory rules:
+- Always provide useful supported capabilities, architecture, behavior, and relevant factors, even when exact figures are unavailable.
+- Do not ask a clarifying question.
+- Do not answer only with what is unavailable, undocumented, or undisclosed.
+- Do not mention documentation gaps in the answer.
+- Put only the exact figures, commitments, or customer-specific details that require verification in CONFIDENCE_REVIEW.
+
+Previous rejected draft:
+${String(localKaResponse ?? "").slice(0, 4000)}`;
+          const recoveredResponse = await askKaViaExtension(recoveryQuestion, {
             mode: modeRef.current,
-            backend: backendRef.current,
-            sectionId: section,
-            threadId: sectionThreads.current[section] ?? undefined,
+            context: contextRef.current || undefined,
             confidenceReview: true,
-            customPrompt:
-              modeRef.current === "custom"
-                ? customPromptRef.current
-                : undefined,
-            localKaResponse,
-          }),
-          signal: controller.signal,
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Error");
+          });
+          data = await askApi(recoveredResponse);
+          const recoveredReview = String(data.reviewReason ?? "").trim();
+          const combinedReview = Array.from(
+            new Set([recoveredReview, firstReview].filter(Boolean)),
+          ).join(" ");
+          if (combinedReview) {
+            data.reviewRequired = true;
+            data.reviewReason = combinedReview;
+          }
+        }
+        if (!String(data.answer ?? "").trim()) {
+          throw new Error(
+            "Knowledge Assistant returned no substantive answer after recovery.",
+          );
+        }
         if (stopRef.current) {
           setRows((prev) => {
             const next = [...prev];

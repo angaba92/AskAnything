@@ -200,7 +200,7 @@ export interface SeparatedReviewLimitations {
 }
 
 const REVIEW_ONLY_LIMITATION =
-  /\b(?:is|are|was|were)?\s*not\s+(?:documented|described|available|confirmed|verified|substantiated|supported|covered)\b|\bdoes not (?:document|describe|detail|confirm|verify|substantiate|support|cover)\b|\brequires? (?:manual )?(?:review|validation|confirmation|clarification)\b|\b(?:additional|further) clarification\b|\b(?:formal )?(?:due[-\s]?diligence|nda)\b|\bavailable (?:product |public )?documentation\b/i;
+  /\b(?:is|are|was|were)?\s*not\s+(?:documented|described|disclosed|published|available|confirmed|verified|substantiated|supported|covered)\b|\bdoes not (?:document|describe|detail|disclose|publish|confirm|verify|substantiate|support|cover)\b|\brequires? (?:manual )?(?:review|validation|confirmation|clarification)\b|\b(?:additional|further) clarification\b|\b(?:formal )?(?:due[-\s]?diligence|nda)\b|\b(?:available|published) (?:product |public )?documentation\b/i;
 
 /**
  * Separa limitaciones internas que el modelo haya dejado dentro de una respuesta.

@@ -10,6 +10,7 @@ import {
   answerFromLocalKnowledge,
   buildHybridKnowledgeContext,
 } from "@/lib/localKnowledge";
+import { isClarificationRequest } from "@/lib/responsePolicy";
 
 export const dynamic = "force-dynamic";
 
@@ -159,6 +160,9 @@ export async function POST(req: NextRequest) {
         threadId: r.threadId,
         reviewRequired: r.reviewRequired ?? false,
         reviewReason: r.reviewReason ?? "",
+        needsRecovery:
+          mode !== "custom" &&
+          (!r.answer.trim() || isClarificationRequest(r.answer)),
       });
     } catch (err) {
       const status = err instanceof KaError ? err.status ?? 502 : 500;
