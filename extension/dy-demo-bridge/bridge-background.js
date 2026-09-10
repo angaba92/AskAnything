@@ -38,12 +38,16 @@ async function proxyAskAnythingRequest(messages, sender) {
   }
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 40000);
     const response = await fetch(ASKANYTHING_KA_ENDPOINT, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ messages }),
+      signal: controller.signal,
     });
     const text = await response.text();
+    clearTimeout(timeout);
     if (!response.ok) {
       return {
         ok: false,
@@ -55,7 +59,10 @@ async function proxyAskAnythingRequest(messages, sender) {
     return {
       ok: false,
       error:
-        "Could not reach Knowledge Assistant. Connect to the corporate VPN and retry. " +
+        (error?.name === "AbortError"
+          ? "Knowledge Assistant timed out after 40 seconds. "
+          : "Could not reach Knowledge Assistant. ") +
+        "Connect to the corporate VPN and retry. " +
         (error instanceof Error ? error.message : ""),
     };
   }

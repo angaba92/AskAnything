@@ -77,7 +77,7 @@ export async function askKaViaExtension(
     {
       messages: [{ role: "user", content }],
     },
-    90000,
+    45000,
   );
 
   if (!response.ok || typeof response.text !== "string") {

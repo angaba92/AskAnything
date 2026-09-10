@@ -126,6 +126,10 @@ export function stripTemplate(text: string): string {
  */
 export function plainifyAnswer(text: string): string {
   let t = text ?? "";
+  // Código inline/fences Markdown -> contenido plano.
+  t = t
+    .replace(/```(?:[A-Za-z0-9_-]+)?\s*\n?([\s\S]*?)```/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1");
   // Enlaces Markdown [label](url) -> "label (url)".
   t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1 ($2)");
   // Negritas/cursivas.

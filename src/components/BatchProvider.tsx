@@ -327,12 +327,15 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     aCol: string,
     rCol: string,
   ): BatchRow[] {
-    return raw
-      .map((rawRow) => {
-        const answer = aCol ? String(rawRow.values[aCol] ?? "") : "";
-        const review = rCol ? String(rawRow.values[rCol] ?? "") : "";
-        return {
-          question: String(rawRow.values[qCol] ?? "").trim(),
+    return raw.flatMap((rawRow) => {
+      const question = String(rawRow.values[qCol] ?? "").trim();
+      if (!question || looksLikeSectionHeading(question)) return [];
+
+      const answer = aCol ? String(rawRow.values[aCol] ?? "") : "";
+      const review = rCol ? String(rawRow.values[rCol] ?? "") : "";
+      return [
+        {
+          question,
           answer,
           review,
           reviewApproved: false,
@@ -342,9 +345,33 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           status: (answer.trim().length > 0 ? "skipped" : "pending") as
             | "pending"
             | "skipped",
-        };
-      })
-      .filter((r) => r.question.length > 0);
+        },
+      ];
+    });
+  }
+
+  function looksLikeSectionHeading(value: string): boolean {
+    const text = value.replace(/\s+/g, " ").trim();
+    if (text.length > 100 || /[?.:;]/.test(text)) return false;
+
+    const words = text.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
+    if (words.length === 0 || words.length > 10) return false;
+    if (
+      /\b(?:is|are|do|does|can|could|will|would|must|should|describe|explain|provide|support|ability|what|how|when|where|which|why)\b/i.test(
+        text,
+      )
+    ) {
+      return false;
+    }
+
+    const significant = words.filter((word) => word.length > 2);
+    const titleCase = significant.filter(
+      (word) => /^[A-Z][a-z]/.test(word) || /^[A-Z]{2,}$/.test(word),
+    );
+    return (
+      significant.length >= 2 &&
+      titleCase.length / significant.length >= 0.8
+    );
   }
 
   function ingestArrayBuffer(buffer: ArrayBuffer, name: string) {
