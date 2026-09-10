@@ -137,7 +137,7 @@ export function plainifyAnswer(text: string): string {
   t = t.replace(/(^|[\s(])\*([^*\n]+?)\*(?=[\s).,;:!?]|$)/g, "$1$2");
 
   const dropLabel =
-    /^(answer|final answer|response|high[-\s]?level answer|how dynamic yield does this(,?\s*high[-\s]?level answer)?|practical example|summary|details?|overview|example|examples|references|sources?|fuentes?)\s*:?\s*$/i;
+    /^(answer|final answer|response|high[-\s]?level answer|how dynamic yield does this(,?\s*high[-\s]?level answer)?|key points?|practical example|summary|details?|overview|example|examples|references|sources?|fuentes?)\s*:?\s*$/i;
   const lines = t.split(/\r?\n/).map((line) => {
     // Separadores Markdown no aportan contenido y ensucian la celda de Excel.
     if (/^\s*(?:-{3,}|_{3,}|\*{3,})\s*$/.test(line)) return null;

@@ -10,7 +10,10 @@ import {
   answerFromLocalKnowledge,
   buildHybridKnowledgeContext,
 } from "@/lib/localKnowledge";
-import { isClarificationRequest } from "@/lib/responsePolicy";
+import {
+  isClarificationRequest,
+  lacksDirectAnswerOpening,
+} from "@/lib/responsePolicy";
 
 export const dynamic = "force-dynamic";
 
@@ -101,6 +104,12 @@ export async function POST(req: NextRequest) {
         r.reviewReason,
         localReviewRequired ? local.reviewReason : "",
       ].filter(Boolean);
+      const needsRecovery =
+        mode !== "custom" &&
+        (!r.answer.trim() ||
+          isClarificationRequest(r.answer) ||
+          /CONFIDENCE[\s_-]*REVIEW\s*:/i.test(r.answer) ||
+          (mode === "loopio" && lacksDirectAnswerOpening(r.answer)));
       return NextResponse.json({
         ok: true,
         answer: r.answer,
@@ -110,6 +119,7 @@ export async function POST(req: NextRequest) {
         reviewRequired: Boolean(r.reviewRequired || localReviewRequired),
         reviewReason: reviewReasons.join(" "),
         matchConfidence: local.confidence,
+        needsRecovery,
       });
     } catch (err) {
       if (local.hits.length > 0) {
@@ -162,7 +172,10 @@ export async function POST(req: NextRequest) {
         reviewReason: r.reviewReason ?? "",
         needsRecovery:
           mode !== "custom" &&
-          (!r.answer.trim() || isClarificationRequest(r.answer)),
+          (!r.answer.trim() ||
+            isClarificationRequest(r.answer) ||
+            /CONFIDENCE[\s_-]*REVIEW\s*:/i.test(r.answer) ||
+            (mode === "loopio" && lacksDirectAnswerOpening(r.answer))),
       });
     } catch (err) {
       const status = err instanceof KaError ? err.status ?? 502 : 500;

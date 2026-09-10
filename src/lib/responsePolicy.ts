@@ -82,7 +82,7 @@ export interface ConfidenceReview {
 /** Extrae y elimina la marca interna de confianza devuelta por KA. */
 export function extractConfidenceReview(text: string): ConfidenceReview {
   const marker =
-    /^\s*CONFIDENCE_REVIEW\s*:\s*(YES|NO)\s*(?:\||[-–—:])?\s*([^\n]*)\s*$/im;
+    /^\s*(?:[•*-]\s*)?CONFIDENCE[\s_-]*REVIEW\s*:\s*(YES|NO)\s*(?:\||[-–—:])?\s*([^\n]*)\s*$/im;
   const match = (text ?? "").match(marker);
   if (!match) {
     return { text: (text ?? "").trim(), required: false, reason: "", found: false };
@@ -126,6 +126,25 @@ const CLARIFICATION_PATTERNS: RegExp[] = [
 /** Identifica respuestas que devuelven preguntas al usuario, inválidas en bulk. */
 export function isClarificationRequest(text: string): boolean {
   return CLARIFICATION_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/** Garantiza que Loopio empiece con una respuesta directa, no con un título/lista. */
+export function lacksDirectAnswerOpening(text: string): boolean {
+  const firstLine = (text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine || /^[•*-]\s+/.test(firstLine)) return true;
+
+  const words = firstLine.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
+  const looksLikeHeading =
+    words.length > 0 &&
+    words.length <= 5 &&
+    !/[.!?]/.test(firstLine) &&
+    words.every(
+      (word) => /^[A-Z][a-z]/.test(word) || /^[A-Z]{2,}$/.test(word),
+    );
+  return looksLikeHeading;
 }
 
 /**

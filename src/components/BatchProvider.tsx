@@ -709,6 +709,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 IMPORTANT FOR THIS BULK RFP ITEM: The previous draft did not contain a usable substantive answer. Answer the original question now with the BEST POSSIBLE positive, client-facing response.
 
 Mandatory rules:
+- The FIRST output line must be a complete paragraph that directly answers the original question. Never start with a heading, label such as "Key Points", or a bullet.
 - Always provide useful supported capabilities, architecture, behavior, and relevant factors, even when exact figures are unavailable.
 - Do not ask a clarifying question.
 - Do not answer only with what is unavailable, undocumented, or undisclosed.
@@ -723,6 +724,11 @@ ${String(localKaResponse ?? "").slice(0, 4000)}`;
             confidenceReview: true,
           });
           data = await askApi(recoveredResponse);
+          if (data.needsRecovery) {
+            throw new Error(
+              "Knowledge Assistant did not return the required direct opening.",
+            );
+          }
           const recoveredReview = String(data.reviewReason ?? "").trim();
           const combinedReview = Array.from(
             new Set([recoveredReview, firstReview].filter(Boolean)),

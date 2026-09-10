@@ -34,6 +34,11 @@ export function normalizeBridgedKaResponse(
   let answer = isCustomMode
     ? confidence.text.trim()
     : plainifyAnswer(stripNonClientFacingPassages(confidence.text));
+  const normalizedConfidence =
+    opts.confidenceReview && !isCustomMode
+      ? extractConfidenceReview(answer)
+      : { text: answer, required: false, reason: "", found: false };
+  answer = normalizedConfidence.text;
 
   if (mode === "bulleted") answer = enforceBullets(answer);
   if (mode === "loopio") {
@@ -59,9 +64,13 @@ export function normalizeBridgedKaResponse(
     sourcesText,
     expert: "knowledge_assistant",
     threadId: "",
-    reviewRequired: confidence.required || separated.limitations.length > 0,
+    reviewRequired:
+      confidence.required ||
+      normalizedConfidence.required ||
+      separated.limitations.length > 0,
     reviewReason:
       confidence.reason ||
+      normalizedConfidence.reason ||
       (separated.limitations.length > 0 ? separated.limitations.join(" ") : ""),
   };
 }
