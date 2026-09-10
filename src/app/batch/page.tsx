@@ -11,7 +11,6 @@ export default function BatchPage() {
     rows,
     context,
     mode,
-    backend,
     running,
     stopping,
     progress,
@@ -35,7 +34,6 @@ export default function BatchPage() {
     setStartRow,
     setContext,
     setMode,
-    setBackend,
     loadFile,
     loadFromUrl,
     setSelectedSheet,
@@ -393,52 +391,12 @@ export default function BatchPage() {
 
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium">Knowledge source:</span>
-          <div className="inline-flex overflow-hidden rounded-lg border border-gray-300 text-xs">
-            <button
-              type="button"
-              onClick={() => setBackend("ka")}
-              disabled={running}
-              className={`px-2.5 py-1 disabled:opacity-60 ${
-                backend === "ka" ? "bg-brand text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Knowledge Assistant
-            </button>
-            <button
-              type="button"
-              onClick={() => setBackend("local")}
-              disabled={running}
-              className={`border-l border-gray-300 px-2.5 py-1 disabled:opacity-60 ${
-                backend === "local"
-                  ? "bg-brand text-white"
-                  : "bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Local Library
-            </button>
-            <button
-              type="button"
-              onClick={() => setBackend("hybrid")}
-              disabled={running}
-              className={`border-l border-gray-300 px-2.5 py-1 disabled:opacity-60 ${
-                backend === "hybrid"
-                  ? "bg-brand text-white"
-                  : "bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Hybrid
-            </button>
-          </div>
-          <span className="text-[11px] text-gray-400">
-            {backend === "ka"
-              ? "Uses the Dynamic Yield Knowledge Assistant."
-              : backend === "local"
-                ? "Returns the closest approved answer stored under Knowledge Base."
-                : "Uses local approved answers as evidence for the Knowledge Assistant (recommended)."}
+          <span className="rounded-lg bg-brand px-2.5 py-1 text-xs text-white">
+            Knowledge Assistant
           </span>
-          <Link href="/kb" className="text-xs font-medium text-brand hover:underline">
-            Manage library
-          </Link>
+          <span className="text-[11px] text-gray-400">
+            Uses the Dynamic Yield Knowledge Assistant.
+          </span>
         </div>
 
         {/* Source: drag & drop / upload OR OneDrive link */}

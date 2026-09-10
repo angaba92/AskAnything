@@ -26,6 +26,7 @@ import {
   separateReviewLimitations,
   stripNonClientFacingPreamble,
   stripNonClientFacingPassages,
+  extractConfidenceNote,
 } from "./responsePolicy";
 
 export type { AnswerMode };
@@ -39,6 +40,7 @@ export {
   separateReviewLimitations,
   stripNonClientFacingPreamble,
   stripNonClientFacingPassages,
+  extractConfidenceNote,
 };
 
 /** Todos los modos disponibles, en el orden en que se muestran en la UI. */

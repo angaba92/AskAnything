@@ -200,6 +200,8 @@ export function stripNonClientFacingPreamble(text: string): string {
 /**
  * Elimina bloques completos sobre búsquedas, acceso, documentación o peticiones
  * de aclaración, preservando cualquier párrafo/viñeta sustantivo de la respuesta.
+ * Nunca devuelve vacío: si el filtro se llevaría todo, conserva el texto sin
+ * preámbulo para que la fila siempre tenga la mejor respuesta disponible.
  */
 export function stripNonClientFacingPassages(text: string): string {
   const withoutPreamble = stripNonClientFacingPreamble(text);
@@ -210,7 +212,31 @@ export function stripNonClientFacingPassages(text: string): string {
       !isClarificationRequest(block) &&
       !/^\s*(?:recommendation|sources?)\s*:/i.test(block),
   );
-  return kept.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+  const filtered = kept.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+  return filtered || withoutPreamble.trim();
+}
+
+/**
+ * Extrae la nota de confianza en cursiva que KA añade al final
+ * ("_Confidence: partial — ..._"). Es metadato interno: sale de la respuesta y
+ * se ofrece como motivo de revisión.
+ */
+export function extractConfidenceNote(text: string): {
+  text: string;
+  note: string;
+} {
+  const pattern =
+    /^\s*[_*]{0,2}\s*Confidence\s*:\s*([^\n]*?)\s*[_*]{0,2}\s*$/gim;
+  const notes: string[] = [];
+  const stripped = (text ?? "").replace(pattern, (_match, reason: string) => {
+    const clean = reason.replace(/[_*]+\s*$/, "").trim();
+    if (clean) notes.push(clean);
+    return "";
+  });
+  return {
+    text: stripped.replace(/\n{3,}/g, "\n\n").trim(),
+    note: notes.join(" "),
+  };
 }
 
 export interface SeparatedReviewLimitations {
@@ -222,41 +248,20 @@ const REVIEW_ONLY_LIMITATION =
   /\b(?:is|are|was|were)?\s*not\s+(?:documented|described|disclosed|published|available|confirmed|verified|substantiated|supported|covered)\b|\bdoes not (?:document|describe|detail|disclose|publish|confirm|verify|substantiate|support|cover)\b|\brequires? (?:manual )?(?:review|validation|confirmation|clarification)\b|\b(?:additional|further) clarification\b|\b(?:formal )?(?:due[-\s]?diligence|nda)\b|\b(?:available|published) (?:product |public )?documentation\b/i;
 
 /**
- * Separa limitaciones internas que el modelo haya dejado dentro de una respuesta.
- * Conserva el contenido positivo anterior a "However/That said", pero mueve el
- * resto a Needs Review.
+ * Detecta limitaciones internas para señalarlas en Needs Review SIN recortar la
+ * respuesta: el contenido de KA se respeta íntegro y la fila siempre conserva la
+ * mejor respuesta disponible.
  */
 export function separateReviewLimitations(
   text: string,
 ): SeparatedReviewLimitations {
   const limitations: string[] = [];
-  const answerBlocks: string[] = [];
 
   for (const rawBlock of (text ?? "").split(/\n{2,}/)) {
-    let block = rawBlock.trim();
+    const block = rawBlock.trim();
     if (!block) continue;
-
-    const transition = block.search(
-      /\b(?:However|Nevertheless|That said|While these capabilities are supported),?\s/i,
-    );
-    if (transition > 0) {
-      const tail = block.slice(transition).trim();
-      if (REVIEW_ONLY_LIMITATION.test(tail)) {
-        limitations.push(tail);
-        block = block.slice(0, transition).trim();
-      }
-    }
-
-    if (!block) continue;
-    if (REVIEW_ONLY_LIMITATION.test(block)) {
-      limitations.push(block);
-      continue;
-    }
-    answerBlocks.push(block);
+    if (REVIEW_ONLY_LIMITATION.test(block)) limitations.push(block);
   }
 
-  return {
-    answer: answerBlocks.join("\n\n").replace(/\n{3,}/g, "\n\n").trim(),
-    limitations,
-  };
+  return { answer: (text ?? "").trim(), limitations };
 }

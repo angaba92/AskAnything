@@ -36,15 +36,13 @@ export interface SpreadsheetColumn {
 }
 
 export type BatchMode = "simple" | "detailed" | "loopio" | "custom";
-// Fuentes visibles: KA remoto, biblioteca local o ambas combinadas.
-// Agent/MCP permanecen aceptados únicamente por compatibilidad interna.
-export type BatchBackend = "ka" | "local" | "hybrid" | "agent" | "mcp";
+// El batch usa exclusivamente el Knowledge Assistant.
+export type BatchBackend = "ka";
 
 interface BatchContextValue {
   rows: BatchRow[];
   context: string;
   mode: BatchMode;
-  backend: BatchBackend;
   fileName: string;
   running: boolean;
   stopping: boolean;
@@ -69,7 +67,6 @@ interface BatchContextValue {
   setStartRow: (v: number) => void;
   setContext: (v: string) => void;
   setMode: (v: BatchMode) => void;
-  setBackend: (v: BatchBackend) => void;
   loadFile: (file: File) => void;
   loadFromUrl: (url: string) => Promise<void>;
   setSelectedSheet: (name: string) => void;
@@ -142,7 +139,6 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [rows, setRows] = useState<BatchRow[]>([]);
   const [context, setContext] = useState("");
   const [mode, setMode] = useState<BatchMode>("detailed");
-  const [backend, setBackend] = useState<BatchBackend>("ka");
   const [fileName, setFileName] = useState("");
   const [running, setRunning] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -190,7 +186,6 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const rowsRef = useRef<BatchRow[]>([]);
   const contextRef = useRef("");
   const modeRef = useRef<BatchMode>("detailed");
-  const backendRef = useRef<BatchBackend>("ka");
   const workbookRef = useRef<XLSX.WorkBook | null>(null);
   const rawRef = useRef<SpreadsheetRawRow[]>([]);
   const answerColRef = useRef("");
@@ -203,7 +198,6 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   rowsRef.current = rows;
   contextRef.current = context;
   modeRef.current = mode;
-  backendRef.current = backend;
   answerColRef.current = answerCol;
   reviewColRef.current = reviewCol;
   selectedSheetRef.current = selectedSheet;
@@ -572,9 +566,9 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     kaHealthyRef.current = false;
     kaUnreachableStreakRef.current = 0;
 
-    const useCorporateBridge =
-      !["localhost", "127.0.0.1"].includes(window.location.hostname) &&
-      (backendRef.current === "ka" || backendRef.current === "hybrid");
+    const useCorporateBridge = !["localhost", "127.0.0.1"].includes(
+      window.location.hostname,
+    );
     if (useCorporateBridge && !(await isExtensionBridgeAvailable())) {
       setError(
         "Corporate bridge not connected. Install/reload the AskAnything Chrome or Edge extension, connect to the VPN, and retry.",
@@ -602,17 +596,9 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     const start = Math.max(0, Math.min(startRowRef.current - 1, total));
     setProgress(start);
 
-    // Pausa base entre filas (ms) + ralentización adaptativa: si DY empieza a
+    // Pausa base entre filas (ms) + ralentización adaptativa: si KA empieza a
     // fallar, aumentamos la espera para no saturarlo; al ir bien, la bajamos.
-    // KA (por defecto) y el agente son rápidos (~1-2s) → pausa corta. El backend
-    // MCP (get_dy_knowledge) es lento (~25-40s) y se rate-limita tras ~2 llamadas
-    // seguidas: le damos una pausa base mucho mayor entre filas.
-    const BASE_DELAY =
-      backendRef.current === "mcp"
-        ? 30000
-        : backendRef.current === "local"
-          ? 100
-          : 1200;
+    const BASE_DELAY = 1200;
     let consecutiveErrors = 0;
 
     // Procesa una fila. Devuelve "done" | "error" | "stopped".
@@ -629,40 +615,9 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         const question = rowsRef.current[i].question;
         let localKaResponse: string | undefined;
         if (useCorporateBridge) {
-          let bridgeContext = contextRef.current;
-          if (backendRef.current === "hybrid") {
-            const searchResponse = await fetch("/api/kb/search", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ query: question, k: 4 }),
-              signal: controller.signal,
-            });
-            if (searchResponse.ok) {
-              const searchData = (await searchResponse.json()) as {
-                hits?: Array<{
-                  source: string;
-                  question: string | null;
-                  text: string;
-                  confidence?: number;
-                }>;
-              };
-              const evidence = (searchData.hits ?? [])
-                .map(
-                  (hit, index) =>
-                    `[Local Library ${index + 1}] Source: ${hit.source}\n` +
-                    `${hit.question ? `Stored question: ${hit.question}\n` : ""}` +
-                    `Stored answer:\n${hit.text}`,
-                )
-                .join("\n\n---\n\n")
-                .slice(0, modeRef.current === "custom" ? 1800 : 4500);
-              bridgeContext = [bridgeContext, evidence]
-                .filter((part) => part.trim())
-                .join("\n\nLOCAL APPROVED LIBRARY EVIDENCE:\n");
-            }
-          }
           localKaResponse = await askKaViaExtension(question, {
             mode: modeRef.current,
-            context: bridgeContext || undefined,
+            context: contextRef.current || undefined,
             confidenceReview: true,
             customPrompt:
               modeRef.current === "custom"
@@ -680,7 +635,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
               question,
               context: contextRef.current,
               mode: modeRef.current,
-              backend: backendRef.current,
+              backend: "ka",
               sectionId: section,
               threadId: sectionThreads.current[section] ?? undefined,
               confidenceReview: true,
@@ -697,50 +652,12 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           return payload;
         };
 
-        let data = await askApi(localKaResponse);
-        if (
-          useCorporateBridge &&
-          modeRef.current !== "custom" &&
-          data.needsRecovery
-        ) {
-          const firstReview = String(data.reviewReason ?? "").trim();
-          const recoveryQuestion = `${question}
-
-IMPORTANT FOR THIS BULK RFP ITEM: The previous draft did not contain a usable substantive answer. Answer the original question now with the BEST POSSIBLE positive, client-facing response.
-
-Mandatory rules:
-- The FIRST output line must be a complete paragraph that directly answers the original question. Never start with a heading, label such as "Key Points", or a bullet.
-- Always provide useful supported capabilities, architecture, behavior, and relevant factors, even when exact figures are unavailable.
-- Do not ask a clarifying question.
-- Do not answer only with what is unavailable, undocumented, or undisclosed.
-- Do not mention documentation gaps in the answer.
-- Put only the exact figures, commitments, or customer-specific details that require verification in CONFIDENCE_REVIEW.
-
-Previous rejected draft:
-${String(localKaResponse ?? "").slice(0, 4000)}`;
-          const recoveredResponse = await askKaViaExtension(recoveryQuestion, {
-            mode: modeRef.current,
-            context: contextRef.current || undefined,
-            confidenceReview: true,
-          });
-          data = await askApi(recoveredResponse);
-          if (data.needsRecovery) {
-            throw new Error(
-              "Knowledge Assistant did not return the required direct opening.",
-            );
-          }
-          const recoveredReview = String(data.reviewReason ?? "").trim();
-          const combinedReview = Array.from(
-            new Set([recoveredReview, firstReview].filter(Boolean)),
-          ).join(" ");
-          if (combinedReview) {
-            data.reviewRequired = true;
-            data.reviewReason = combinedReview;
-          }
-        }
+        // Una sola llamada por fila: KA debe dar la mejor respuesta a la primera
+        // y la normalización conserva su contenido íntegro.
+        const data = await askApi(localKaResponse);
         if (!String(data.answer ?? "").trim()) {
           throw new Error(
-            "Knowledge Assistant returned no substantive answer after recovery.",
+            "Knowledge Assistant returned no substantive answer.",
           );
         }
         if (stopRef.current) {
@@ -773,7 +690,7 @@ ${String(localKaResponse ?? "").slice(0, 4000)}`;
         });
         // MIGRACIÓN KA: el KA respondió → lo marcamos sano y reseteamos la racha
         // de fallos, para que un "unreachable" posterior se trate como transitorio.
-        if (backendRef.current === "ka") kaHealthyRef.current = true;
+        kaHealthyRef.current = true;
         kaUnreachableStreakRef.current = 0;
         return "done";
       } catch (err) {
@@ -802,25 +719,10 @@ ${String(localKaResponse ?? "").slice(0, 4000)}`;
           setError((err as Error).message);
           return "stopped";
         }
-        // MCP nunca es alcanzable fuera de la red corporativa (ni en Vercel): no
-        // tiene sentido reintentar miles de filas → paramos de inmediato con el
-        // aviso claro. OJO: gateado a backend "mcp", porque el mensaje de KA
-        // ("temporarily unreachable… corporate network…") también contenía
-        // "corporate network" y antes abortaba el batch por un blip transitorio.
-        if (
-          backendRef.current === "mcp" &&
-          /MCP|corporate network|npm run dev/i.test((err as Error).message)
-        ) {
-          setError((err as Error).message);
-          return "stopped";
-        }
         // KA inalcanzable / timeout suele ser un fallo transitorio de DNS, red o
         // rate limit. Nunca detenemos todo el batch: dejamos que el circuito haga
         // cooldown y vuelva a intentar esta misma fila.
-        if (
-          backendRef.current === "ka" &&
-          /unreachable|temporarily|timed out/i.test((err as Error).message)
-        ) {
+        if (/unreachable|temporarily|timed out/i.test((err as Error).message)) {
           kaUnreachableStreakRef.current += 1;
         }
         // El hilo de esta sección pudo quedar en mal estado: lo descartamos y
@@ -1010,7 +912,6 @@ ${String(localKaResponse ?? "").slice(0, 4000)}`;
     rows,
     context,
     mode,
-    backend,
     fileName,
     running,
     stopping,
@@ -1035,7 +936,6 @@ ${String(localKaResponse ?? "").slice(0, 4000)}`;
     setStartRow,
     setContext,
     setMode,
-    setBackend,
     loadFile,
     loadFromUrl,
     setSelectedSheet,

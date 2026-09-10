@@ -11,6 +11,7 @@ import { kaChat, parseKaSources } from "../kaClient";
 import { findCuratedRfpHint } from "../curatedRfpKnowledge";
 import {
   buildKaUserContent,
+  extractConfidenceNote,
   extractConfidenceReview,
   hasNonClientFacingLanguage,
   isClarificationRequest,
@@ -31,9 +32,12 @@ export function normalizeBridgedKaResponse(
   const confidence = opts.confidenceReview
     ? extractConfidenceReview(rawText)
     : { text: rawText, required: false, reason: "", found: false };
+  const note = isCustomMode
+    ? { text: confidence.text, note: "" }
+    : extractConfidenceNote(confidence.text);
   let answer = isCustomMode
-    ? confidence.text.trim()
-    : plainifyAnswer(stripNonClientFacingPassages(confidence.text));
+    ? note.text.trim()
+    : plainifyAnswer(stripNonClientFacingPreamble(note.text));
   const normalizedConfidence =
     opts.confidenceReview && !isCustomMode
       ? extractConfidenceReview(answer)
@@ -67,10 +71,12 @@ export function normalizeBridgedKaResponse(
     reviewRequired:
       confidence.required ||
       normalizedConfidence.required ||
+      Boolean(note.note) ||
       separated.limitations.length > 0,
     reviewReason:
       confidence.reason ||
       normalizedConfidence.reason ||
+      note.note ||
       (separated.limitations.length > 0 ? separated.limitations.join(" ") : ""),
   };
 }
@@ -204,15 +210,21 @@ ${originalDraft}`;
   // Normalizamos igual que el resto de backends: markdown → texto plano y, en
   // modo viñetas, garantizamos el formato aunque el modelo devuelva prosa.
   let answer = isCustomMode ? res.text.trim() : plainifyAnswer(res.text);
+  if (!isCustomMode) {
+    const note = extractConfidenceNote(answer);
+    answer = note.text;
+    if (note.note) {
+      reviewRequired = true;
+      if (!reviewReason) reviewReason = note.note;
+    }
+  }
   if (mode === "bulleted") answer = enforceBullets(answer);
   if (!isCustomMode && hasNonClientFacingLanguage(answer)) {
-    // Última red: elimina solo los pasajes internos, nunca la respuesta completa.
-    const salvaged = plainifyAnswer(stripNonClientFacingPassages(answer));
-    if (salvaged) answer = salvaged;
+    // Señalamos la revisión pero NO recortamos: la respuesta de KA se respeta.
     reviewRequired = true;
     if (!reviewReason) {
       reviewReason =
-        "Verify the exact claims removed from internal or insufficiently supported reasoning.";
+        "Verify the claims that rely on internal or insufficiently supported reasoning.";
     }
   }
   if (mode === "loopio") {
