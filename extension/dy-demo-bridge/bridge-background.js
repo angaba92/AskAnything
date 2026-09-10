@@ -39,7 +39,7 @@ async function proxyAskAnythingRequest(messages, sender) {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 40000);
+    const timeout = setTimeout(() => controller.abort(), 180000);
     const response = await fetch(ASKANYTHING_KA_ENDPOINT, {
       method: "POST",
       headers: { "content-type": "application/json" },

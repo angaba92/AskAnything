@@ -25,6 +25,8 @@ export interface BatchRow {
   sources: string;
   sourceRow: number;
   status: "pending" | "running" | "done" | "error" | "skipped";
+  /** Marca de tiempo del último Redo, para distinguir un review recalculado. */
+  redoneAt?: number;
 }
 
 export interface SpreadsheetColumn {
@@ -86,6 +88,10 @@ interface BatchContextValue {
   run: () => Promise<void>;
   stop: () => void;
   download: () => void;
+  /** Vuelve a pedir la respuesta de una fila aportando material adicional. */
+  redoRow: (rowIndex: number, guidance: string) => Promise<void>;
+  redoingRow: number | null;
+  queuedRedoRows: number[];
 }
 
 const QUESTION_KEYS = [
@@ -161,6 +167,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [customPrompt, setCustomPrompt] = useState("");
   const [customPromptFileName, setCustomPromptFileName] = useState("");
   const [startRow, setStartRowState] = useState(1);
+  const [redoingRow, setRedoingRow] = useState<number | null>(null);
+  const [queuedRedoRows, setQueuedRedoRows] = useState<number[]>([]);
+  const redoQueue = useRef<Array<{ index: number; guidance: string }>>([]);
+  const runningRef = useRef(false);
   const stopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const rowAttempts = useRef<Record<number, number>>({});
@@ -196,6 +206,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const customPromptRef = useRef("");
 
   rowsRef.current = rows;
+  runningRef.current = running;
   contextRef.current = context;
   modeRef.current = mode;
   answerColRef.current = answerCol;
@@ -553,6 +564,116 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     if (modeRef.current === "custom") setMode("detailed");
   }
 
+  /**
+   * Ejecuta el Redo de UNA fila aportando material adicional (link, cita o
+   * notas) como fuente autorizada. Siempre una petición a KA a la vez.
+   */
+  async function executeRedo(rowIndex: number, guidance: string) {
+    const row = rowsRef.current[rowIndex];
+    const extra = guidance.trim();
+    if (!row || !extra) return;
+
+    setRedoingRow(rowIndex);
+    setError(null);
+    try {
+      const enrichedContext = [
+        contextRef.current,
+        `ADDITIONAL SOURCE MATERIAL PROVIDED BY THE RFP OWNER (treat as authoritative and use it to improve the answer):\n${extra}`,
+      ]
+        .filter((part) => part.trim())
+        .join("\n\n");
+
+      const useBridge = !["localhost", "127.0.0.1"].includes(
+        window.location.hostname,
+      );
+      let bridged: string | undefined;
+      if (useBridge) {
+        if (!(await isExtensionBridgeAvailable())) {
+          throw new Error(
+            "Corporate bridge not connected. Install/reload the AskAnything extension, connect to the VPN, and retry.",
+          );
+        }
+        bridged = await askKaViaExtension(row.question, {
+          mode: modeRef.current,
+          context: enrichedContext,
+          confidenceReview: true,
+          customPrompt:
+            modeRef.current === "custom" ? customPromptRef.current : undefined,
+        });
+      }
+
+      const response = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          question: row.question,
+          context: enrichedContext,
+          mode: modeRef.current,
+          backend: "ka",
+          confidenceReview: true,
+          customPrompt:
+            modeRef.current === "custom" ? customPromptRef.current : undefined,
+          localKaResponse: bridged,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Error");
+      if (!String(data.answer ?? "").trim()) {
+        throw new Error("Knowledge Assistant returned no substantive answer.");
+      }
+
+      setRows((prev) => {
+        const next = [...prev];
+        next[rowIndex] = {
+          ...next[rowIndex],
+          answer: data.answer,
+          review: data.reviewRequired
+            ? String(data.reviewReason || "Manual review required.")
+            : "",
+          reviewApproved: false,
+          expert: data.expert,
+          sources: data.tools,
+          status: "done",
+          redoneAt: Date.now(),
+        };
+        return next;
+      });
+    } catch (err) {
+      setError(`Redo failed on row ${rowIndex + 1}: ${(err as Error).message}`);
+    } finally {
+      setRedoingRow(null);
+    }
+  }
+
+  /**
+   * Encola el Redo cuando el batch está en marcha (se atiende con prioridad
+   * entre filas) o lo ejecuta al momento cuando el batch está parado.
+   */
+  async function redoRow(rowIndex: number, guidance: string) {
+    const extra = guidance.trim();
+    if (!rowsRef.current[rowIndex] || !extra) return;
+
+    if (runningRef.current) {
+      redoQueue.current.push({ index: rowIndex, guidance: extra });
+      setQueuedRedoRows((prev) =>
+        prev.includes(rowIndex) ? prev : [...prev, rowIndex],
+      );
+      return;
+    }
+    if (redoingRow !== null) return;
+    await executeRedo(rowIndex, extra);
+  }
+
+  /** Vacía la cola de Redos antes de continuar con la siguiente pregunta. */
+  async function drainRedoQueue() {
+    while (redoQueue.current.length > 0 && !stopRef.current) {
+      const job = redoQueue.current.shift();
+      if (!job) break;
+      await executeRedo(job.index, job.guidance);
+      setQueuedRedoRows((prev) => prev.filter((index) => index !== job.index));
+    }
+  }
+
   async function run() {
     if (rowsRef.current.length === 0 || running) return;
     setRunning(true);
@@ -749,6 +870,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     let i = start;
 
     while (i < total && !stopRef.current) {
+      // Prioridad: los Redo encolados se atienden antes de la siguiente fila.
+      await drainRedoQueue();
+      if (stopRef.current) break;
+
       const st = rowsRef.current[i].status;
       // Saltamos filas ya resueltas (respondidas en el archivo de origen =
       // "skipped", o ya completadas antes = "done").
@@ -807,6 +932,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         setError(
           `Knowledge Assistant is returning repeated errors. ` +
             `Pausing ${Math.round(cooldownMs / 1000)}s, then retrying row ${i + 1}. ` +
+            `Last error: ${rowLastErrors.current[i] ?? "unknown"}. ` +
             `Press Stop to cancel.`,
         );
         await interruptibleSleep(cooldownMs);
@@ -822,6 +948,9 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         if (stopRef.current) break;
       }
     }
+
+    // Al terminar el recorrido atendemos los Redo que quedaran encolados.
+    await drainRedoQueue();
 
     const remainingErrors = rowsRef.current.filter(
       (r) => r.status === "error",
@@ -955,6 +1084,9 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     run,
     stop,
     download,
+    redoRow,
+    redoingRow,
+    queuedRedoRows,
   };
 
   return (

@@ -89,7 +89,7 @@ async function proxyKaRequest(messages, sender) {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 40000);
+    const timeout = setTimeout(() => controller.abort(), 180000);
     const res = await fetch(KA_ENDPOINT, {
       method: "POST",
       headers: { "content-type": "application/json" },

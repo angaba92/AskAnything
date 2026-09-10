@@ -16,6 +16,7 @@ export const CLIENT_FACING_RFP_POLICY = `CLIENT-FACING RFP RULES (mandatory):
 - ALWAYS provide the best supported substantive answer available. Never replace the whole answer with a generic NDA, due-diligence, documentation-gap, or contact-us statement.
 - If exact details are unavailable, answer positively at the strongest supported level and place the precise missing or uncertain details ONLY in the internal CONFIDENCE_REVIEW reason.
 - Use an authoritative vendor voice ("Mastercard Dynamic Yield" or "we"), not an assistant/researcher voice ("I searched", "I found", "I could not find").
+- You may fully use the knowledge found in internal sources (Guru, Confluence, internal wikis) to build the answer, but NEVER cite, name, or link them. Only cite customer-facing resources: the Dynamic Yield Knowledge Base (support.dynamicyield.com) and the developer documentation. If the only supporting material is internal, still give the full substantive answer and simply omit the source line.
 - Preserve the requested answer format, but these client-facing and factual-safety rules take priority.`;
 
 const NON_CLIENT_FACING_PATTERNS: RegExp[] = [
@@ -237,6 +238,43 @@ export function extractConfidenceNote(text: string): {
     text: stripped.replace(/\n{3,}/g, "\n\n").trim(),
     note: notes.join(" "),
   };
+}
+
+/** Dominios internos que nunca deben aparecer en una respuesta de cliente. */
+const INTERNAL_SOURCE_HOSTS =
+  /(?:app\.)?getguru\.com|atlassian\.net|confluence\b|jira\b|slack\.com|sharepoint\.com/i;
+
+/** True si una URL apunta a una herramienta interna (Guru, Confluence, etc.). */
+export function isInternalSourceUrl(url: string): boolean {
+  return INTERNAL_SOURCE_HOSTS.test(url ?? "");
+}
+
+/**
+ * Elimina enlaces a herramientas internas del texto entregado al cliente.
+ * Solo se permiten la Knowledge Base y la documentación de desarrollo.
+ */
+export function stripInternalSourceLinks(text: string): string {
+  const lines = (text ?? "").split(/\r?\n/).flatMap((line) => {
+    const urls = line.match(/https?:\/\/[^\s)\]]+/g) ?? [];
+    if (urls.length === 0) return [line];
+    const internal = urls.filter((url) => isInternalSourceUrl(url));
+    if (internal.length === 0) return [line];
+
+    // Si la línea existe solo para citar la fuente interna, se descarta entera.
+    if (internal.length === urls.length && /^\s*(?:[•*-]\s*)?(?:sources?|for more information)\b/i.test(line)) {
+      return [];
+    }
+    let cleaned = line;
+    for (const url of internal) {
+      cleaned = cleaned
+        .replace(new RegExp(`\\s*\\(${url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)`, "g"), "")
+        .split(url)
+        .join("");
+    }
+    cleaned = cleaned.replace(/\s{2,}/g, " ").replace(/\s+([.,;:])/g, "$1").trim();
+    return cleaned && !/^[•*\-–—:;,.\s]*$/.test(cleaned) ? [cleaned] : [];
+  });
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 export interface SeparatedReviewLimitations {

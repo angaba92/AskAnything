@@ -6,6 +6,74 @@ import { useBatch } from "@/components/BatchProvider";
 import { ANSWER_MODES, MODE_LABELS, MODE_HINTS } from "@/lib/promptMapping";
 import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
 
+function RedoAnswer({
+  rowIndex,
+  disabled,
+  busy,
+  queued,
+  onRedo,
+}: {
+  rowIndex: number;
+  disabled: boolean;
+  busy: boolean;
+  queued: boolean;
+  onRedo: (rowIndex: number, guidance: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [guidance, setGuidance] = useState("");
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        disabled={disabled}
+        className="mt-2 rounded-lg border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+      >
+        {busy
+          ? "↻ Asking…"
+          : queued
+            ? "↻ Queued"
+            : "↻ Redo with a link or notes"}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-2 rounded-lg border border-gray-300 bg-gray-50 p-2">
+      <textarea
+        value={guidance}
+        onChange={(e) => setGuidance(e.target.value)}
+        rows={3}
+        placeholder="Paste a link, a quote, or notes to use as the authoritative source."
+        className="w-full resize-y rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 focus:border-brand focus:outline-none"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={async () => {
+            const text = guidance;
+            setOpen(false);
+            setGuidance("");
+            await onRedo(rowIndex, text);
+          }}
+          disabled={disabled || !guidance.trim()}
+          className="rounded-lg bg-brand px-3 py-1 text-xs font-medium text-white hover:bg-brand-dark disabled:opacity-40"
+        >
+          Ask again
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="text-xs text-gray-500 hover:underline"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function BatchPage() {
   const {
     rows,
@@ -53,6 +121,9 @@ export default function BatchPage() {
     run,
     stop,
     download,
+    redoRow,
+    redoingRow,
+    queuedRedoRows,
   } = useBatch();
 
   const [url, setUrl] = useState("");
@@ -578,9 +649,9 @@ export default function BatchPage() {
             <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase text-gray-500">
               <tr>
                 <th className="w-10 p-2">#</th>
-                <th className="w-[25%] p-2">Question</th>
-                <th className="w-[39%] p-2">Answer</th>
-                <th className="w-[28%] p-2">Needs Review</th>
+                <th className="w-[22%] p-2">Question</th>
+                <th className="w-[34%] p-2">Answer</th>
+                <th className="w-[36%] p-2">Needs Review</th>
                 <th className="w-[8%] p-2">Status</th>
               </tr>
             </thead>
@@ -591,6 +662,15 @@ export default function BatchPage() {
                   <td className="p-2">{r.question}</td>
                   <td className="whitespace-pre-wrap p-2 text-gray-700">
                     {r.answer}
+                    {r.answer.trim() && (
+                      <RedoAnswer
+                        rowIndex={i}
+                        disabled={redoingRow === i || queuedRedoRows.includes(i)}
+                        busy={redoingRow === i}
+                        queued={queuedRedoRows.includes(i)}
+                        onRedo={redoRow}
+                      />
+                    )}
                   </td>
                   <td className="p-3">
                     <div
@@ -606,8 +686,8 @@ export default function BatchPage() {
                         value={r.review}
                         onChange={(e) => updateReview(i, e.target.value)}
                         placeholder="No review required"
-                        rows={5}
-                        className="w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-brand focus:outline-none"
+                        rows={14}
+                        className="min-h-[220px] w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm leading-relaxed text-gray-900 shadow-sm focus:border-brand focus:outline-none"
                       />
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <span
@@ -624,6 +704,9 @@ export default function BatchPage() {
                             : r.review
                               ? "Pending approval"
                               : "No review flag"}
+                          {r.redoneAt
+                            ? ` · recalculated ${new Date(r.redoneAt).toLocaleTimeString()}`
+                            : ""}
                         </span>
                         <button
                           type="button"

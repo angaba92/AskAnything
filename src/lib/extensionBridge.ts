@@ -77,9 +77,8 @@ export async function askKaViaExtension(
     {
       messages: [{ role: "user", content }],
     },
-    45000,
+    190000,
   );
-
   if (!response.ok || typeof response.text !== "string") {
     throw new Error(response.error || "Knowledge Assistant bridge failed.");
   }

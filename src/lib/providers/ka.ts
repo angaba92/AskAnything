@@ -15,7 +15,9 @@ import {
   extractConfidenceReview,
   hasNonClientFacingLanguage,
   isClarificationRequest,
+  isInternalSourceUrl,
   separateReviewLimitations,
+  stripInternalSourceLinks,
   stripNonClientFacingPreamble,
   stripNonClientFacingPassages,
 } from "../promptMapping";
@@ -28,7 +30,9 @@ export function normalizeBridgedKaResponse(
 ): ProviderAnswer {
   const mode = resolveMode(opts);
   const isCustomMode = mode === "custom";
-  const sources = parseKaSources(rawText);
+  const sources = parseKaSources(rawText).filter(
+    (source) => !isInternalSourceUrl(source.uri ?? ""),
+  );
   const confidence = opts.confidenceReview
     ? extractConfidenceReview(rawText)
     : { text: rawText, required: false, reason: "", found: false };
@@ -37,7 +41,9 @@ export function normalizeBridgedKaResponse(
     : extractConfidenceNote(confidence.text);
   let answer = isCustomMode
     ? note.text.trim()
-    : plainifyAnswer(stripNonClientFacingPreamble(note.text));
+    : stripInternalSourceLinks(
+        plainifyAnswer(stripNonClientFacingPreamble(note.text)),
+      );
   const normalizedConfidence =
     opts.confidenceReview && !isCustomMode
       ? extractConfidenceReview(answer)
@@ -211,6 +217,7 @@ ${originalDraft}`;
   // modo viñetas, garantizamos el formato aunque el modelo devuelva prosa.
   let answer = isCustomMode ? res.text.trim() : plainifyAnswer(res.text);
   if (!isCustomMode) {
+    answer = stripInternalSourceLinks(answer);
     const note = extractConfidenceNote(answer);
     answer = note.text;
     if (note.note) {
@@ -243,7 +250,8 @@ ${originalDraft}`;
 
   const urls = res.sources
     .map((s) => s.uri)
-    .filter((u): u is string => Boolean(u));
+    .filter((u): u is string => Boolean(u))
+    .filter((u) => !isInternalSourceUrl(u));
   const sourcesText = urls.join("; ");
 
   // Si el modelo citó fuentes en el bloque "## Sources" pero no dejó ninguna URL

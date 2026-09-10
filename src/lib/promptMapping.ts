@@ -27,6 +27,8 @@ import {
   stripNonClientFacingPreamble,
   stripNonClientFacingPassages,
   extractConfidenceNote,
+  isInternalSourceUrl,
+  stripInternalSourceLinks,
 } from "./responsePolicy";
 
 export type { AnswerMode };
@@ -41,6 +43,8 @@ export {
   stripNonClientFacingPreamble,
   stripNonClientFacingPassages,
   extractConfidenceNote,
+  isInternalSourceUrl,
+  stripInternalSourceLinks,
 };
 
 /** Todos los modos disponibles, en el orden en que se muestran en la UI. */
