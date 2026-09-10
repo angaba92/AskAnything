@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createThread, sendMessageWithRetry, DyAuthError } from "@/lib/dyClient";
 import { plainifyAnswer, enforceBullets, resolveMode } from "@/lib/promptTemplate";
 import { generateStateless, resolveProvider } from "@/lib/providers";
+import { normalizeBridgedKaResponse } from "@/lib/providers/ka";
 import { KaError } from "@/lib/kaClient";
 import { McpError, isMcpReachableEnv, MCP_UNREACHABLE_MSG } from "@/lib/mcpClient";
 import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
@@ -22,7 +23,7 @@ export const dynamic = "force-dynamic";
  * plantilla de dyClient). structured=false/omitido → respuesta simple y concisa.
  */
 export async function POST(req: NextRequest) {
-  const { question, context, structured, mode, threadId, sectionId, backend, confidenceReview, customPrompt } = (await req.json()) as {
+  const { question, context, structured, mode, threadId, sectionId, backend, confidenceReview, customPrompt, localKaResponse } = (await req.json()) as {
     question: string;
     context?: string;
     structured?: boolean;
@@ -32,6 +33,7 @@ export async function POST(req: NextRequest) {
     backend?: string;
     confidenceReview?: boolean;
     customPrompt?: string;
+    localKaResponse?: string;
   };
 
   if (!question?.trim()) {
@@ -48,6 +50,12 @@ export async function POST(req: NextRequest) {
           : "Custom mode requires a non-empty .md prompt.",
       },
       { status: 400 },
+    );
+  }
+  if (localKaResponse && localKaResponse.length > 500000) {
+    return NextResponse.json(
+      { error: "Knowledge Assistant response is too large." },
+      { status: 413 },
     );
   }
 
@@ -76,14 +84,17 @@ export async function POST(req: NextRequest) {
       .join("\n\n");
 
     try {
-      const r = await generateStateless("ka", {
+      const generateOpts = {
         question,
         mode,
         structured,
         context: enrichedContext || undefined,
         confidenceReview,
         customPrompt,
-      });
+      };
+      const r = localKaResponse
+        ? normalizeBridgedKaResponse(localKaResponse, generateOpts)
+        : await generateStateless("ka", generateOpts);
       const localReviewRequired = local.hits.length > 0 && local.reviewRequired;
       const reviewReasons = [
         r.reviewReason,
@@ -129,14 +140,17 @@ export async function POST(req: NextRequest) {
   // NUEVO backend por defecto: DY Knowledge Assistant (stateless, con fuentes).
   if (provider === "ka") {
     try {
-      const r = await generateStateless("ka", {
+      const generateOpts = {
         question,
         mode,
         structured,
         context,
         confidenceReview,
         customPrompt,
-      });
+      };
+      const r = localKaResponse
+        ? normalizeBridgedKaResponse(localKaResponse, generateOpts)
+        : await generateStateless("ka", generateOpts);
       return NextResponse.json({
         ok: true,
         answer: r.answer,

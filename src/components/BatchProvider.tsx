@@ -11,6 +11,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as XLSX from "xlsx";
 import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
+import {
+  askKaViaExtension,
+  isExtensionBridgeAvailable,
+} from "@/lib/extensionBridge";
 
 export interface BatchRow {
   question: string;
@@ -541,6 +545,18 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     kaHealthyRef.current = false;
     kaUnreachableStreakRef.current = 0;
 
+    const useCorporateBridge =
+      !["localhost", "127.0.0.1"].includes(window.location.hostname) &&
+      (backendRef.current === "ka" || backendRef.current === "hybrid");
+    if (useCorporateBridge && !(await isExtensionBridgeAvailable())) {
+      setError(
+        "Corporate bridge not connected. Install/reload the AskAnything Chrome or Edge extension, connect to the VPN, and retry.",
+      );
+      setRunning(false);
+      setStopping(false);
+      return;
+    }
+
     // Espera que se puede interrumpir al instante si el usuario pulsa Stop.
     const interruptibleSleep = (ms: number) =>
       new Promise<void>((resolve) => {
@@ -583,13 +599,57 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       try {
         const controller = new AbortController();
         abortRef.current = controller;
+        const question = rowsRef.current[i].question;
+        let localKaResponse: string | undefined;
+        if (useCorporateBridge) {
+          let bridgeContext = contextRef.current;
+          if (backendRef.current === "hybrid") {
+            const searchResponse = await fetch("/api/kb/search", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ query: question, k: 4 }),
+              signal: controller.signal,
+            });
+            if (searchResponse.ok) {
+              const searchData = (await searchResponse.json()) as {
+                hits?: Array<{
+                  source: string;
+                  question: string | null;
+                  text: string;
+                  confidence?: number;
+                }>;
+              };
+              const evidence = (searchData.hits ?? [])
+                .map(
+                  (hit, index) =>
+                    `[Local Library ${index + 1}] Source: ${hit.source}\n` +
+                    `${hit.question ? `Stored question: ${hit.question}\n` : ""}` +
+                    `Stored answer:\n${hit.text}`,
+                )
+                .join("\n\n---\n\n")
+                .slice(0, modeRef.current === "custom" ? 1800 : 4500);
+              bridgeContext = [bridgeContext, evidence]
+                .filter((part) => part.trim())
+                .join("\n\nLOCAL APPROVED LIBRARY EVIDENCE:\n");
+            }
+          }
+          localKaResponse = await askKaViaExtension(question, {
+            mode: modeRef.current,
+            context: bridgeContext || undefined,
+            confidenceReview: true,
+            customPrompt:
+              modeRef.current === "custom"
+                ? customPromptRef.current
+                : undefined,
+          });
+        }
         // Sección (y por tanto hilo) de esta pregunta. Rotamos en cada intento.
         const section = BATCH_SECTIONS[rotation.current % BATCH_SECTIONS.length];
         const res = await fetch("/api/ask", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            question: rowsRef.current[i].question,
+            question,
             context: contextRef.current,
             mode: modeRef.current,
             backend: backendRef.current,
@@ -600,6 +660,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
               modeRef.current === "custom"
                 ? customPromptRef.current
                 : undefined,
+            localKaResponse,
           }),
           signal: controller.signal,
         });
