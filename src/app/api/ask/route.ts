@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
         (!r.answer.trim() ||
           isClarificationRequest(r.answer) ||
           /CONFIDENCE[\s_-]*REVIEW\s*:/i.test(r.answer) ||
-          (mode === "loopio" && lacksDirectAnswerOpening(r.answer)));
+          (mode !== "simple" && lacksDirectAnswerOpening(r.answer)));
       return NextResponse.json({
         ok: true,
         answer: r.answer,
@@ -175,7 +175,7 @@ export async function POST(req: NextRequest) {
           (!r.answer.trim() ||
             isClarificationRequest(r.answer) ||
             /CONFIDENCE[\s_-]*REVIEW\s*:/i.test(r.answer) ||
-            (mode === "loopio" && lacksDirectAnswerOpening(r.answer))),
+            (mode !== "simple" && lacksDirectAnswerOpening(r.answer))),
       });
     } catch (err) {
       const status = err instanceof KaError ? err.status ?? 502 : 500;
