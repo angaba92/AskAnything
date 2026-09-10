@@ -164,6 +164,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const stopRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const rowAttempts = useRef<Record<number, number>>({});
+  const rowLastErrors = useRef<Record<number, string>>({});
   // Rotación de secciones: repartimos las preguntas entre BATCH_SECTIONS. Cada
   // sección tiene su propio hilo persistente en DY, que cacheamos aquí para no
   // recrearlo en cada pregunta. `rotation` avanza en cada intento para ir
@@ -534,6 +535,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     setError(null);
     stopRef.current = false;
     rowAttempts.current = {};
+    rowLastErrors.current = {};
     sectionThreads.current = {};
     rotation.current = 0;
     kaHealthyRef.current = false;
@@ -646,14 +648,15 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           });
           return "stopped";
         }
+        rowLastErrors.current[i] = (err as Error).message;
         setRows((prev) => {
           const next = [...prev];
           next[i] = {
             ...next[i],
-            answer: "ERROR: " + (err as Error).message,
-            review: "Request failed and requires manual review.",
+            answer: "",
+            review: "",
             reviewApproved: false,
-            status: "error",
+            status: "pending",
           };
           return next;
         });
@@ -673,21 +676,14 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           setError((err as Error).message);
           return "stopped";
         }
-        // KA inalcanzable / timeout: casi siempre es un blip transitorio
-        // (rate-limit o corte breve) cuando el KA ya venía respondiendo. En ese
-        // caso NO abortamos: caemos a `return "error"` para que el circuit breaker
-        // haga cooldown y reintente la MISMA fila. Solo paramos en seco si el KA
-        // NUNCA respondió en esta ejecución y ya encadena ≥3 fallos → problema real
-        // de config/red (p. ej. KA_URL apuntando a dev interno).
+        // KA inalcanzable / timeout suele ser un fallo transitorio de DNS, red o
+        // rate limit. Nunca detenemos todo el batch: dejamos que el circuito haga
+        // cooldown y vuelva a intentar esta misma fila.
         if (
           backendRef.current === "ka" &&
           /unreachable|temporarily|timed out/i.test((err as Error).message)
         ) {
           kaUnreachableStreakRef.current += 1;
-          if (!kaHealthyRef.current && kaUnreachableStreakRef.current >= 3) {
-            setError((err as Error).message);
-            return "stopped";
-          }
         }
         // El hilo de esta sección pudo quedar en mal estado: lo descartamos y
         // avanzamos la rotación para que el reintento caiga en otra sección/hilo.
@@ -741,18 +737,35 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
       // ¿Rendirse con esta fila? Solo tras muchos intentos con cooldown.
       if (rowAttempts.current[i] >= MAX_ATTEMPTS_PER_ROW) {
+        const finalError =
+          rowLastErrors.current[i] ??
+          "The Knowledge Assistant request failed after multiple retries.";
+        setRows((prev) => {
+          const next = [...prev];
+          next[i] = {
+            ...next[i],
+            answer: `ERROR: ${finalError}`,
+            review: "Request failed after multiple retries and requires manual review.",
+            reviewApproved: false,
+            status: "error",
+          };
+          return next;
+        });
         setProgress(i + 1);
         i++; // dejamos la fila en "error" y seguimos con la siguiente
         continue;
       }
 
-      // Circuit breaker: varios fallos seguidos => DY está caído/rate-limited.
-      // Pausa larga y creciente (1min, 2min, 3min… tope 5min) antes de
+      // Circuit breaker: varios fallos seguidos => KA está caído/rate-limited.
+      // Pausa creciente (15s, 30s, 60s) antes de
       // reintentar la MISMA fila. Machacar solo alarga el castigo.
       if (consecutiveErrors >= CASCADE_THRESHOLD) {
-        const cooldownMs = Math.min(60000 * (consecutiveErrors - 1), 300000);
+        const cooldownMs = Math.min(
+          15000 * 2 ** (consecutiveErrors - CASCADE_THRESHOLD),
+          60000,
+        );
         setError(
-          `DY is returning repeated errors (likely rate-limited or down). ` +
+          `Knowledge Assistant is returning repeated errors. ` +
             `Pausing ${Math.round(cooldownMs / 1000)}s, then retrying row ${i + 1}. ` +
             `Press Stop to cancel.`,
         );
@@ -775,7 +788,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     ).length;
     if (remainingErrors > 0 && !stopRef.current) {
       setError(
-        `${remainingErrors} row(s) still failing after multiple retries — DY's service may be down. Press Start again later to retry just those rows.`,
+        `${remainingErrors} row(s) still failing after multiple retries. Press Start again later to retry just those rows.`,
       );
     } else if (!stopRef.current) {
       setError(null);

@@ -27,7 +27,12 @@ export const KA_URL = (
   process.env.KA_URL ?? "https://dy-knowledge-assistant.use1.dynamicyield.com"
 ).trim().replace(/\/+$/, "");
 
-const KA_HOST = new URL(KA_URL).host;
+const KA_CORPORATE_URL = (
+  process.env.KA_FALLBACK_URL ??
+  "https://dy-knowledge-assistant.use1.dev.dydy.io"
+).trim().replace(/\/+$/, "");
+
+const KA_ENDPOINTS = Array.from(new Set([KA_URL, KA_CORPORATE_URL]));
 
 export interface KaSource {
   title?: string;
@@ -60,7 +65,7 @@ export class KaError extends Error {
  * producción esto no debería ocurrir ni siquiera en Vercel, pero lo dejamos por
  * si se apunta al entorno dev (interno) o hay un corte de red. */
 export const KA_UNREACHABLE_MSG =
-  "The Knowledge Assistant is temporarily unreachable. If you pointed KA_URL to the internal dev environment, it only works on the Mastercard corporate network — use the production URL or run locally. You can also switch to a backup backend (marked DO NOT USE).";
+  "The Knowledge Assistant is temporarily unreachable. The request will be retried automatically.";
 
 /** Log con prefijo para poder rastrear las llamadas al KA en los logs del server. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -107,11 +112,13 @@ export async function kaChat(
   messages: KaChatMessage[],
   opts: { timeoutMs?: number; retries?: number; signal?: AbortSignal } = {}
 ): Promise<KaResult> {
-  const retries = opts.retries ?? 2;
+  const retries = opts.retries ?? 4;
   const timeoutMs = opts.timeoutMs ?? 60000;
   let lastErr: Error | null = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    const endpoint = KA_ENDPOINTS[attempt % KA_ENDPOINTS.length];
+    const host = new URL(endpoint).host;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     // Encadenamos el abort externo (p. ej. el usuario cancela) con el interno.
@@ -122,7 +129,7 @@ export async function kaChat(
 
     try {
       const started = Date.now();
-      const res = await fetch(`${KA_URL}/api/chat`, {
+      const res = await fetch(`${endpoint}/api/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ messages }),
@@ -137,14 +144,17 @@ export async function kaChat(
 
       // La respuesta es texto plano en streaming: res.text() acumula el total.
       const text = (await res.text()).trim();
-      log("info", `ok in ${Date.now() - started}ms (${text.length} chars)`);
+      log(
+        "info",
+        `ok via ${host} in ${Date.now() - started}ms (${text.length} chars)`,
+      );
       return { text, sources: parseKaSources(text) };
     } catch (err) {
       const e = err as Error;
       if (e instanceof KaError) {
         lastErr = e;
         log(resumableStatus(e.status) ? "warn" : "error", "HTTP request failed", {
-          host: KA_HOST,
+          host,
           status: e.status,
           attempt: attempt + 1,
           attempts: retries + 1,
@@ -161,7 +171,7 @@ export async function kaChat(
         if (opts.signal?.aborted) throw new KaError("KA request aborted.", 499);
         lastErr = new KaError("KA request timed out.", 504);
         log("warn", "request timed out", {
-          host: KA_HOST,
+          host,
           timeoutMs,
           attempt: attempt + 1,
           attempts: retries + 1,
@@ -169,7 +179,7 @@ export async function kaChat(
       } else {
         const cause = networkCause(e);
         log("error", "network request failed", {
-          host: KA_HOST,
+          host,
           error: e.name,
           code: cause.code,
           cause: cause.name,
@@ -178,7 +188,7 @@ export async function kaChat(
           attempts: retries + 1,
         });
         lastErr = new KaError(
-          `${KA_UNREACHABLE_MSG} Diagnostic: host=${KA_HOST}, code=${cause.code ?? "unknown"}.`,
+          `${KA_UNREACHABLE_MSG} Diagnostic: host=${host}, code=${cause.code ?? "unknown"}.`,
           503,
         );
       }

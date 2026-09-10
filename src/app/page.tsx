@@ -34,6 +34,7 @@ export default function Home() {
   const [customPromptFileName, setCustomPromptFileName] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
   const [bridgeConnected, setBridgeConnected] = useState(false);
+  const [bridgeRequired, setBridgeRequired] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -57,6 +58,15 @@ export default function Home() {
   }, [loadThreads]);
 
   useEffect(() => {
+    const required = !["localhost", "127.0.0.1"].includes(
+      window.location.hostname,
+    );
+    setBridgeRequired(required);
+    if (!required) {
+      setBridgeConnected(false);
+      return;
+    }
+
     let active = true;
     const check = () => {
       isExtensionBridgeAvailable().then((connected) => {
@@ -84,7 +94,7 @@ export default function Home() {
     const res = await fetch("/api/threads/new", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ backend: "ka" }),
+      body: JSON.stringify({}),
     });
     if (res.ok) {
       const { id } = await res.json();
@@ -123,27 +133,29 @@ export default function Home() {
         : d
     );
 
-    const connected =
-      bridgeConnected || (await isExtensionBridgeAvailable());
-    setBridgeConnected(connected);
-    if (!connected) {
-      setError(
-        "Corporate bridge not connected. Install/reload the AskAnything Chrome or Edge extension and connect to the VPN.",
-      );
-      setSending(false);
-      return;
-    }
-    let localKaResponse: string;
-    try {
-      localKaResponse = await askKaViaExtension(text, {
-        mode,
-        customPrompt: mode === "custom" ? customPrompt : undefined,
-      });
-    } catch (bridgeError) {
-      setBridgeConnected(false);
-      setError((bridgeError as Error).message);
-      setSending(false);
-      return;
+    let localKaResponse: string | undefined;
+    if (bridgeRequired) {
+      const connected =
+        bridgeConnected || (await isExtensionBridgeAvailable());
+      setBridgeConnected(connected);
+      if (!connected) {
+        setError(
+          "Corporate bridge not connected. Install/reload the AskAnything Chrome or Edge extension and connect to the VPN.",
+        );
+        setSending(false);
+        return;
+      }
+      try {
+        localKaResponse = await askKaViaExtension(text, {
+          mode,
+          customPrompt: mode === "custom" ? customPrompt : undefined,
+        });
+      } catch (bridgeError) {
+        setBridgeConnected(false);
+        setError((bridgeError as Error).message);
+        setSending(false);
+        return;
+      }
     }
 
     const res = await fetch("/api/chat", {
@@ -153,7 +165,6 @@ export default function Home() {
         threadId: activeId,
         message: text,
         mode,
-        backend: "ka",
         customPrompt: mode === "custom" ? customPrompt : undefined,
         localKaResponse,
       }),
@@ -264,17 +275,19 @@ export default function Home() {
                 </button>
               )}
               <div className="flex shrink-0 items-center gap-3">
-                <span
-                  className={`rounded-full px-2 py-1 text-[11px] font-medium ${
-                    bridgeConnected
-                      ? "bg-emerald-50 text-emerald-700"
-                      : "bg-amber-50 text-amber-700"
-                  }`}
-                >
-                  {bridgeConnected
-                    ? "Corporate bridge connected"
-                    : "Corporate bridge required"}
-                </span>
+                {bridgeRequired && (
+                  <span
+                    className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                      bridgeConnected
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-amber-50 text-amber-700"
+                    }`}
+                  >
+                    {bridgeConnected
+                      ? "Corporate bridge connected"
+                      : "Corporate bridge required"}
+                  </span>
+                )}
                 <select
                   value={detail.status}
                   onChange={(e) => patchThread({ status: e.target.value })}
