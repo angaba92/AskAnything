@@ -31,6 +31,17 @@ HttpOnly cookies) and POSTs it to the app's `/api/dy-session` endpoint.
 3. Confirm the page shows **Corporate bridge connected**.
 4. Ask a question normally.
 
+After updating the extension files, click **Reload** in `chrome://extensions`,
+then reload the AskAnything tab. For incognito, enable **Allow in Incognito**.
+The connected indicator checks extension messaging, not VPN access; **Test
+bridge** in Batch sends a real request to Knowledge Assistant.
+
+The updated bridge waits up to 180 seconds for KA (190 seconds in the page),
+does not automatically resend a timed-out generation, and forwards Stop to the
+active request. If Chrome has invalidated the extension runtime, cancellation
+cannot be guaranteed until its request deadline. Reload before resuming.
+When both updated bridge extensions are installed, the page selects only one.
+
 Only the exact AskAnything production origin and local development origins can
 send requests through the extension. The upstream URL is fixed; the page cannot
 use the extension as a general-purpose proxy.

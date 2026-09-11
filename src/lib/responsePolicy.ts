@@ -22,7 +22,7 @@ export const CLIENT_FACING_RFP_POLICY = `CLIENT-FACING RFP RULES (mandatory):
 
 const NON_CLIENT_FACING_PATTERNS: RegExp[] = [
   /\bbased on (?:my|the|our) (?:search|review|available (?:knowledge|information|sources?))/i,
-  /\b(?:i|we) (?:was|were|am|are )?unable to (?:locate|find|identify|access)/i,
+  /\b(?:i|we) (?:(?:was|were|am|are)\s+)?unable to (?:locate|find|identify|access)/i,
   /\b(?:i|we) (?:could not|couldn['’]t|cannot|can['’]t) (?:locate|find|identify|access)/i,
   /\b(?:my|our) (?:search|review) (?:of|through|did not|has not)/i,
   /\b(?:internal|available|underlying) knowledge (?:base|sources?)/i,
@@ -54,6 +54,10 @@ const NON_CLIENT_FACING_PATTERNS: RegExp[] = [
   /\bnot (?:fully|comprehensively) documented in (?:the )?(?:accessible|available|public)\b/i,
   /\b(?:i|we) should provide what is confirmed\b/i,
   /\brfp[-\s]?critical question\b/i,
+  /\b(?:reference|information|result)s?\s+(?:that\s+)?(?:i|we)\s+found\b/i,
+  /\binternal (?:troubleshooting|guidance|sources?|references?)\b/i,
+  /^\s*(?:i|we) found (?:information|references?|documentation|evidence)\b/i,
+  /^\s*(?:the )?documentation (?:references|describes|mentions)\b/i,
 ];
 
 /** Detecta lenguaje sobre búsquedas/limitaciones internas no apto para clientes. */
@@ -84,19 +88,21 @@ export interface ConfidenceReview {
 /** Extrae y elimina la marca interna de confianza devuelta por KA. */
 export function extractConfidenceReview(text: string): ConfidenceReview {
   const marker =
-    /^\s*(?:[•*-]\s*)?CONFIDENCE[\s_-]*REVIEW\s*:\s*(YES|NO)\s*(?:\||[-–—:])?\s*([^\n]*)\s*$/im;
-  const match = (text ?? "").match(marker);
-  if (!match) {
-    return { text: (text ?? "").trim(), required: false, reason: "", found: false };
-  }
-  const required = match[1].toUpperCase() === "YES";
+    /^[ \t]*(?:[•*-][ \t]+)?[*_`]*CONFIDENCE[\s_-]*REVIEW[*_`]*\s*:[*_`]*\s*(YES|NO)[*_`]*\s*(?:\||[-–—:])?\s*([^\n]*)$/gim;
+  const reasons: string[] = [];
+  let found = false;
+  const cleaned = (text ?? "").replace(marker, (_match, flag: string, reason: string) => {
+    found = true;
+    if (flag.toUpperCase() === "YES") {
+      reasons.push(reason.replace(/[*_`]+\s*$/, "").trim() || "The model requested manual verification.");
+    }
+    return "";
+  });
   return {
-    text: (text ?? "").replace(marker, "").trim(),
-    required,
-    reason: required
-      ? match[2].trim() || "The model requested manual verification."
-      : "",
-    found: true,
+    text: cleaned.trim(),
+    required: reasons.length > 0,
+    reason: [...new Set(reasons)].join(" "),
+    found,
   };
 }
 
@@ -155,48 +161,44 @@ export function lacksDirectAnswerOpening(text: string): boolean {
  * claramente procesales y separadores Markdown.
  */
 export function stripNonClientFacingPreamble(text: string): string {
-  let lines = (text ?? "").split(/\r?\n/);
-
-  // KA a veces imprime primero su razonamiento, inserta `---` y luego repite una
-  // respuesta final válida. Si el bloque anterior al primer separador contiene
-  // lenguaje interno, lo descartamos completo y conservamos la respuesta final.
-  const separatorIndex = lines.findIndex((line) =>
-    /^\s*(?:-{3,}|_{3,}|\*{3,})\s*$/.test(line)
-  );
-  if (separatorIndex >= 0) {
-    const prefix = lines.slice(0, separatorIndex).join("\n");
-    if (
-      hasNonClientFacingLanguage(prefix) ||
-      PROCESS_ONLY_LINE_PATTERNS.some((pattern) => pattern.test(prefix))
-    ) {
-      lines = lines.slice(separatorIndex + 1);
-    }
-
-  }
-
-  const cleaned = lines
+  const cleaned = (text ?? "").split(/\r?\n/)
     .map((line) => {
       const trimmed = line.trim();
       if (/^(?:-{3,}|_{3,}|\*{3,})$/.test(trimmed)) return null;
-
-      // Si el modelo usa "Based on the available documentation," como mero
-      // prefijo de una frase sustantiva, conservamos la afirmación posterior.
-      const withoutSourcePreamble = line.replace(
-        /^\s*based on (?:the )?(?:available|provided|reviewed)?\s*(?:documentation|information|sources?|materials?)[,;:]\s*/i,
-        ""
-      );
-      if (
-        PROCESS_ONLY_LINE_PATTERNS.some(
-          (pattern) => pattern.test(line) || pattern.test(withoutSourcePreamble)
-        )
-      ) {
-        return null;
-      }
-      return withoutSourcePreamble;
+      // Split at boundaries, not by matching sentence contents: decimals and
+      // URLs must remain byte-for-byte intact.
+      return line.split(/(?<=[.!?])\s+(?=[A-Z])/).map((part) => {
+        const value = part
+          .replace(/^\s*(?:perfect|great|certainly|sure)[.!,:]\s*/i, "")
+          .replace(/^\s*(?:based on|according to)\b[^,;:\n]*\b(?:documentation|information|sources?|materials?|search|research|knowledge|guru)\b[^,;:\n]*[,;:]\s*/i, "")
+          .replace(/^\s*(?:here|below) (?:is|are) (?:the|an|our) (?:final |rfp[-\s]?ready )?(?:answer|response)\s*:\s*/i, "");
+        return PROCESS_ONLY_LINE_PATTERNS.some((pattern) => pattern.test(value)) ? "" : value;
+      }).filter(Boolean).join(" ");
     })
     .filter((line): line is string => line !== null);
 
   return cleaned.join("\n").replace(/^\s+|\s+$/g, "").replace(/\n{3,}/g, "\n\n");
+}
+
+/**
+ * Elimina SOLO las frases internas (búsquedas, refusals, huecos de documentación)
+ * conservando el resto del párrafo. Es menos destructivo que filtrar bloques
+ * enteros, que borraba respuestas válidas por una sola frase.
+ */
+export function stripNonClientFacingSentences(text: string): string {
+  const withoutPreamble = stripNonClientFacingPreamble(text);
+  return withoutPreamble.split("\n").map((line) =>
+    line.split(/(?<=[.!?])\s+(?=[A-Z])/)
+      .filter((part) => {
+        const value = part.replace(/^\s*[•*-]\s*/, "").trim();
+        // A mixed factual sentence is retained for review, never deleted just
+        // because it contains a caveat or an actual unsupported capability.
+        const researchSentence = /^(?:(?:i|we)\b|(?:the\s+)?(?:public|published|available|accessible|internal|product|technical)\s+(?:documentation|sources?|knowledge|information)|(?:the\s+)?(?:documentation|search results?|guru)\b|contact\b|based on\b|the only\b.*\breference\b)/i.test(value);
+        return !isClarificationRequest(value) &&
+          !(researchSentence && hasNonClientFacingLanguage(value));
+      })
+      .join(" "),
+  ).join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**
@@ -309,35 +311,27 @@ export function separateReviewLimitations(
   text: string,
 ): SeparatedReviewLimitations {
   const limitations: string[] = [];
-  const answerBlocks: string[] = [];
-
   for (const rawBlock of (text ?? "").split(/\n{2,}/)) {
-    let block = rawBlock.trim();
+    const block = rawBlock.trim();
     if (!block) continue;
-
-    // Coletilla final del tipo "…; however, X is not documented": el contenido
-    // positivo se queda y solo la salvedad viaja a Needs Review.
-    const transition = block.search(
-      /[;,]?\s*\b(?:however|nevertheless|that said|although|while these capabilities are supported)\b,?\s/i,
-    );
-    if (transition > 0) {
-      const tail = block.slice(transition).trim();
-      if (REVIEW_ONLY_LIMITATION.test(tail)) {
-        limitations.push(tail.replace(/^[;,]\s*/, ""));
-        block = block.slice(0, transition).trim().replace(/[;,]$/, "");
-        if (block && !/[.!?]$/.test(block)) block += ".";
-      }
-    }
-
-    if (!block) continue;
-    if (REVIEW_ONLY_LIMITATION.test(block)) {
-      limitations.push(block);
-      continue;
-    }
-    answerBlocks.push(block);
+    if (REVIEW_ONLY_LIMITATION.test(block)) limitations.push(block);
   }
+  return { answer: (text ?? "").trim(), limitations };
+}
 
-  const answer = answerBlocks.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
-  // Nunca devolvemos vacío: si todo era salvedad, se conserva el texto original.
-  return { answer: answer || (text ?? "").trim(), limitations };
+/** Reject formatting/citations alone, without judging the factual answer. */
+export function hasSubstantiveAnswer(text: string): boolean {
+  return (text ?? "").split(/\r?\n/).some((line) => {
+    if (/^\s*(?:#{1,6}\s|(?:sources?|references?|confidence[\s_-]*review|confidence)\s*:)/i.test(line)) return false;
+    const body = line
+      .replace(/\[[^\]]*\]\(https?:\/\/[^)\s]+\)/g, "")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/^[\s•*#_+-]+/, "")
+      .trim();
+    if (!body || /^(?:answer|response|summary|details|key points|example|sources|references)\s*:?$/i.test(body)) return false;
+    const words = body.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? [];
+    if (words.length <= 5 && !/[.!?]/.test(body) &&
+        words.every((word) => /^[A-Z]/.test(word))) return false;
+    return words.length >= 2;
+  });
 }

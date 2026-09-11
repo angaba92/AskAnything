@@ -13,6 +13,7 @@ import {
 import {
   isClarificationRequest,
   lacksDirectAnswerOpening,
+  hasSubstantiveAnswer,
 } from "@/lib/responsePolicy";
 
 export const dynamic = "force-dynamic";
@@ -96,7 +97,7 @@ export async function POST(req: NextRequest) {
         confidenceReview,
         customPrompt,
       };
-      const r = localKaResponse
+      const r = typeof localKaResponse === "string"
         ? normalizeBridgedKaResponse(localKaResponse, generateOpts)
         : await generateStateless("ka", generateOpts);
       const localReviewRequired = local.hits.length > 0 && local.reviewRequired;
@@ -158,10 +159,18 @@ export async function POST(req: NextRequest) {
         context,
         confidenceReview,
         customPrompt,
+        signal: req.signal,
       };
-      const r = localKaResponse
+      const r = typeof localKaResponse === "string"
         ? normalizeBridgedKaResponse(localKaResponse, generateOpts)
         : await generateStateless("ka", generateOpts);
+      if (!hasSubstantiveAnswer(r.answer)) {
+        return NextResponse.json({
+          error: "Knowledge Assistant returned only sources, metadata, or no usable answer. Add notes and use Redo, or retry this row manually.",
+          code: "NO_SUBSTANTIVE_ANSWER",
+          reviewReason: r.reviewReason || "No substantive answer was returned.",
+        }, { status: 422 });
+      }
       return NextResponse.json({
         ok: true,
         answer: r.answer,

@@ -50,4 +50,5 @@ export interface GenerateOpts {
   confidenceReview?: boolean;
   /** Instrucciones cargadas por el usuario; sustituyen las integradas en Custom. */
   customPrompt?: string;
+  signal?: AbortSignal;
 }

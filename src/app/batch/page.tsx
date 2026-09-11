@@ -135,6 +135,7 @@ export default function BatchPage() {
 
   const [url, setUrl] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const busy = running || redoingRow !== null || testingBridge;
   const reviewCount = rows.filter(
     (row) => row.review.trim() && !row.reviewApproved,
   ).length;
@@ -475,7 +476,7 @@ export default function BatchPage() {
           <button
             type="button"
             onClick={testBridge}
-            disabled={testingBridge || running}
+            disabled={busy}
             className="rounded-lg border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
           >
             {testingBridge ? "Testing bridge…" : "Test bridge"}
@@ -515,6 +516,7 @@ export default function BatchPage() {
               <input
                 type="file"
                 accept=".xlsx,.xls,.csv,.ods"
+                disabled={busy}
                 onChange={handleFile}
                 className="hidden"
               />
@@ -545,7 +547,7 @@ export default function BatchPage() {
             <button
               type="button"
               onClick={() => loadFromUrl(url)}
-              disabled={fetching || !url.trim()}
+              disabled={busy || fetching || !url.trim()}
               className="rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
             >
               {fetching ? "Loading…" : "Load from link"}
@@ -574,7 +576,7 @@ export default function BatchPage() {
             <button
               type="button"
               onClick={() => setMappingOpen(true)}
-              disabled={running}
+              disabled={busy}
               className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
             >
               Configure mapping
@@ -602,7 +604,7 @@ export default function BatchPage() {
               se vuelve rojo y dice "Stop" (antes quedaba deshabilitado como
               "Running…" y el Stop era otro botón aparte → confuso). El progreso
               sigue visible en la barra inferior y en el propio botón. */}
-          {running ? (
+          {busy ? (
             <button
               onClick={stop}
               disabled={stopping}
@@ -623,7 +625,7 @@ export default function BatchPage() {
           )}
           <button
             onClick={download}
-            disabled={doneCount === 0}
+            disabled={rows.length === 0}
             className="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
           >
             Download .xlsx
@@ -775,7 +777,7 @@ export default function BatchPage() {
                   <td className="p-2">{r.question}</td>
                   <td className="whitespace-pre-wrap p-2 text-gray-700">
                     {r.answer}
-                    {r.answer.trim() && (
+                    {(r.answer.trim() || r.status === "error") && (
                       <RedoAnswer
                         rowIndex={i}
                         disabled={redoingRow === i || queuedRedoRows.includes(i)}

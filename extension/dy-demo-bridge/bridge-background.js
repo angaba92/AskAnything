@@ -29,7 +29,13 @@ function validAskAnythingMessages(messages) {
   );
 }
 
-async function proxyAskAnythingRequest(messages, sender) {
+const askAnythingControllers = new Map();
+
+function askAnythingRequestKey(requestId, sender) {
+  return JSON.stringify([sender.tab?.id, sender.frameId, sender.documentId, requestId]);
+}
+
+async function proxyAskAnythingRequest(messages, sender, requestId) {
   if (!ASKANYTHING_ORIGINS.has(askAnythingSenderOrigin(sender))) {
     return { ok: false, error: "Request rejected: untrusted app origin." };
   }
@@ -37,9 +43,16 @@ async function proxyAskAnythingRequest(messages, sender) {
     return { ok: false, error: "Request rejected: invalid message payload." };
   }
 
+  const key = typeof requestId === "string" ? askAnythingRequestKey(requestId, sender) : null;
+  if (key && askAnythingControllers.has(key)) return { ok: false, error: "Request already active." };
+  const controller = new AbortController();
+  if (key) askAnythingControllers.set(key, controller);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 180000);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180000);
     const response = await fetch(ASKANYTHING_KA_ENDPOINT, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -47,7 +60,6 @@ async function proxyAskAnythingRequest(messages, sender) {
       signal: controller.signal,
     });
     const text = await response.text();
-    clearTimeout(timeout);
     if (!response.ok) {
       return {
         ok: false,
@@ -56,24 +68,40 @@ async function proxyAskAnythingRequest(messages, sender) {
     }
     return { ok: true, text };
   } catch (error) {
+    if (controller.signal.aborted) {
+      return { ok: false, error: timedOut
+        ? "Knowledge Assistant timed out after 180 seconds."
+        : "Knowledge Assistant request cancelled." };
+    }
     return {
       ok: false,
       error:
-        (error?.name === "AbortError"
-          ? "Knowledge Assistant timed out after 180 seconds. "
-          : "Could not reach Knowledge Assistant. ") +
+        "Could not reach Knowledge Assistant. " +
         "Connect to the corporate VPN and retry. " +
         (error instanceof Error ? error.message : ""),
     };
+  } finally {
+    clearTimeout(timeout);
+    if (key) askAnythingControllers.delete(key);
   }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "PROXY_KA_CANCEL" || message?.type === "PROXY_KA_HEARTBEAT") {
+    if (!ASKANYTHING_ORIGINS.has(askAnythingSenderOrigin(sender)) || typeof message.requestId !== "string") {
+      sendResponse({ ok: false });
+      return false;
+    }
+    const controller = askAnythingControllers.get(askAnythingRequestKey(message.requestId, sender));
+    if (message.type === "PROXY_KA_CANCEL") controller?.abort();
+    sendResponse({ ok: true, active: !!controller });
+    return false;
+  }
   if (message?.type === "PROXY_PING") {
     sendResponse({ ok: true });
     return false;
   }
   if (message?.type !== "PROXY_KA_REQUEST") return;
-  proxyAskAnythingRequest(message.messages, sender).then(sendResponse);
+  proxyAskAnythingRequest(message.messages, sender, message.requestId).then(sendResponse);
   return true;
 });

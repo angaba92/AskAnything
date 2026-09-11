@@ -79,7 +79,13 @@ function senderOrigin(sender) {
   }
 }
 
-async function proxyKaRequest(messages, sender) {
+const kaControllers = new Map();
+
+function kaRequestKey(requestId, sender) {
+  return JSON.stringify([sender.tab?.id, sender.frameId, sender.documentId, requestId]);
+}
+
+async function proxyKaRequest(messages, sender, requestId) {
   if (!APP_ORIGINS.has(senderOrigin(sender))) {
     return { ok: false, error: "Request rejected: untrusted app origin." };
   }
@@ -87,9 +93,16 @@ async function proxyKaRequest(messages, sender) {
     return { ok: false, error: "Request rejected: invalid message payload." };
   }
 
+  const key = typeof requestId === "string" ? kaRequestKey(requestId, sender) : null;
+  if (key && kaControllers.has(key)) return { ok: false, error: "Request already active." };
+  const controller = new AbortController();
+  if (key) kaControllers.set(key, controller);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 180000);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180000);
     const res = await fetch(KA_ENDPOINT, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -97,7 +110,6 @@ async function proxyKaRequest(messages, sender) {
       signal: controller.signal,
     });
     const text = await res.text();
-    clearTimeout(timeout);
     if (!res.ok) {
       return {
         ok: false,
@@ -106,19 +118,35 @@ async function proxyKaRequest(messages, sender) {
     }
     return { ok: true, text };
   } catch (error) {
+    if (controller.signal.aborted) {
+      return { ok: false, error: timedOut
+        ? "Knowledge Assistant timed out after 180 seconds."
+        : "Knowledge Assistant request cancelled." };
+    }
     return {
       ok: false,
       error:
-        (error?.name === "AbortError"
-          ? "Knowledge Assistant timed out after 180 seconds. "
-          : "Could not reach Knowledge Assistant. ") +
+        "Could not reach Knowledge Assistant. " +
         "Connect to the corporate VPN and retry. " +
         (error instanceof Error ? error.message : ""),
     };
+  } finally {
+    clearTimeout(timeout);
+    if (key) kaControllers.delete(key);
   }
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === "PROXY_KA_CANCEL" || msg?.type === "PROXY_KA_HEARTBEAT") {
+    if (!APP_ORIGINS.has(senderOrigin(sender)) || typeof msg.requestId !== "string") {
+      sendResponse({ ok: false });
+      return false;
+    }
+    const controller = kaControllers.get(kaRequestKey(msg.requestId, sender));
+    if (msg.type === "PROXY_KA_CANCEL") controller?.abort();
+    sendResponse({ ok: true, active: !!controller });
+    return false;
+  }
   if (msg?.type === "PROXY_PING") {
     sendResponse({ ok: true });
     return false;
@@ -128,7 +156,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // async response
   }
   if (msg?.type === "PROXY_KA_REQUEST") {
-    proxyKaRequest(msg.messages, sender).then(sendResponse);
+    proxyKaRequest(msg.messages, sender, msg.requestId).then(sendResponse);
     return true;
   }
 });
