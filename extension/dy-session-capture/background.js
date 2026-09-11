@@ -119,6 +119,10 @@ async function proxyKaRequest(messages, sender) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === "PROXY_PING") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (msg?.type === "PUSH_DY_SESSION") {
     pushSession(msg.appBaseUrl).then(sendResponse);
     return true; // async response

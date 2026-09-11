@@ -31,7 +31,21 @@ window.addEventListener("message", (event) => {
   if (typeof requestId !== "string") return;
 
   if (type === "PING") {
-    reply(requestId, { ok: true });
+    // El PING debe demostrar que el service worker responde, no solo que el
+    // content script está inyectado: en incógnito puede fallar justo ahí.
+    chrome.runtime.sendMessage({ type: "PROXY_PING" }, (response) => {
+      if (chrome.runtime.lastError) {
+        reply(requestId, {
+          ok: false,
+          error: chrome.runtime.lastError.message,
+        });
+        return;
+      }
+      reply(requestId, response?.ok ? { ok: true } : {
+        ok: false,
+        error: "The bridge background worker did not respond.",
+      });
+    });
     return;
   }
 

@@ -31,7 +31,26 @@ window.addEventListener("message", (event) => {
   if (typeof requestId !== "string") return;
 
   if (type === "PING") {
-    replyToAskAnything(requestId, { ok: true });
+    // Comprobamos el service worker de verdad: que el content script esté
+    // inyectado no garantiza que el puente pueda salir a KA (p. ej. incógnito).
+    chrome.runtime.sendMessage({ type: "PROXY_PING" }, (response) => {
+      if (chrome.runtime.lastError) {
+        replyToAskAnything(requestId, {
+          ok: false,
+          error: chrome.runtime.lastError.message,
+        });
+        return;
+      }
+      replyToAskAnything(
+        requestId,
+        response?.ok
+          ? { ok: true }
+          : {
+              ok: false,
+              error: "The bridge background worker did not respond.",
+            },
+      );
+    });
     return;
   }
   if (type !== "KA_REQUEST") return;

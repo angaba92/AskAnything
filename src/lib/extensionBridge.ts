@@ -55,7 +55,9 @@ function requestBridge(
 
 export async function isExtensionBridgeAvailable(): Promise<boolean> {
   try {
-    const response = await requestBridge("PING");
+    // El PING ahora hace ida y vuelta hasta el service worker, que puede estar
+    // dormido: 1,5 s se quedaba corto y daba falsos "no conectado".
+    const response = await requestBridge("PING", {}, 5000);
     return response.ok;
   } catch {
     return false;

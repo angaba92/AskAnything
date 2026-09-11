@@ -69,6 +69,10 @@ async function proxyAskAnythingRequest(messages, sender) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "PROXY_PING") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message?.type !== "PROXY_KA_REQUEST") return;
   proxyAskAnythingRequest(message.messages, sender).then(sendResponse);
   return true;
