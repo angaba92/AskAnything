@@ -96,17 +96,62 @@ async function requestBridge(
   }
 }
 
-export async function isExtensionBridgeAvailable(): Promise<boolean> {
+export async function isExtensionBridgeAvailable(signal?: AbortSignal): Promise<boolean> {
   const probe = bridgeHealth.beginProbe();
   try {
     // Check the background worker, not just the injected content script.
-    const response = await requestBridge("PING", {}, 5000);
+    const response = await requestBridge("PING", {}, 5000, signal);
     bridgeHealth.completeProbe(probe, response);
     return response.ok;
   } catch (error) {
-    bridgeHealth.completeProbe(probe, null, error instanceof Error ? error.message : String(error));
+    if (!signal?.aborted) {
+      bridgeHealth.completeProbe(probe, null, error instanceof Error ? error.message : String(error));
+    }
     return false;
   }
+}
+
+let monitorUsers = 0;
+let stopMonitor: (() => void) | undefined;
+
+/** Shared detection only: never generates an answer or overlaps an active request. */
+export function watchExtensionBridge(): () => void {
+  if (["localhost", "127.0.0.1"].includes(window.location.hostname)) return () => {};
+  if (++monitorUsers === 1) {
+    let pending: AbortController | undefined;
+    const busy = () => ["discovering", "requesting", "processing"].includes(bridgeHealth.getSnapshot().phase);
+    const check = () => {
+      if (document.visibilityState === "hidden" || pending || busy()) return;
+      const controller = new AbortController();
+      pending = controller;
+      void isExtensionBridgeAvailable(controller.signal).finally(() => {
+        if (pending === controller) pending = undefined;
+      });
+    };
+    const unsubscribe = bridgeHealth.subscribe(() => {
+      if (busy()) pending?.abort();
+    });
+    const timer = window.setInterval(check, 5000);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    check();
+    stopMonitor = () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+      unsubscribe();
+      pending?.abort();
+    };
+  }
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    if (--monitorUsers === 0) {
+      stopMonitor?.();
+      stopMonitor = undefined;
+    }
+  };
 }
 
 export async function askKaViaExtension(

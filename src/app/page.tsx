@@ -21,7 +21,6 @@ import {
 } from "@/lib/promptMapping";
 import {
   askKaViaExtension,
-  isExtensionBridgeAvailable,
 } from "@/lib/extensionBridge";
 
 export default function Home() {
@@ -64,18 +63,6 @@ export default function Home() {
       window.location.hostname,
     );
     setBridgeRequired(required);
-    if (!required) return;
-
-    const check = () => {
-      if (!["discovering", "requesting", "processing"].includes(bridgeHealth.getSnapshot().phase)) {
-        void isExtensionBridgeAvailable();
-      }
-    };
-    check();
-    window.addEventListener("focus", check);
-    return () => {
-      window.removeEventListener("focus", check);
-    };
   }, []);
 
   useEffect(() => {

@@ -29,6 +29,12 @@ de la extensión. En **localhost** se indica la ruta directa: el servidor local
 llama a KA y no utiliza ni prueba el bridge. En la versión alojada, la respuesta
 de la extensión pasa por `/api/ask` o `/api/chat` para su procesamiento.
 
+La detección de extensión se repite cada 5 segundos con el indicador visible y
+sin petición activa, y al volver a la pestaña. Un PING correcto tras recargar la
+extensión limpia el error de detección y muestra **Extension OK**, sin necesidad
+de generar una respuesta. No borra errores de KA, app o respuesta ni restaura
+una confirmación antigua de KA.
+
 ## Puesta en marcha
 
 ```bash

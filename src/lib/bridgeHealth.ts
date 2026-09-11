@@ -50,9 +50,13 @@ export function createBridgeHealthStore(now = Date.now) {
         identity.extensionVersion !== state.identity.extensionVersion ||
         identity.transport !== state.identity.transport
       );
+      const extensionRecovered = identity && state.phase === "error" && state.errorStage === "extension";
+      const preserveRequestError = state.phase === "error" && state.errorStage !== "extension";
       update(identity
-        ? { extension: "detected", identity, extensionCheckedAt: now(), ...(changed && state.phase === "ready" ? { phase: "untested" as const } : {}) }
-        : { extension: "missing", extensionCheckedAt: now(), phase: "error", errorStage: "extension", error: error || "The extension did not respond." });
+        ? { extension: "detected", identity, extensionCheckedAt: now(),
+          ...(extensionRecovered || changed && state.phase === "ready" ? { phase: "untested" as const, error: null, errorStage: null } : {}) }
+        : { extension: "missing", extensionCheckedAt: now(),
+          ...(!preserveRequestError ? { phase: "error" as const, errorStage: "extension" as const, error: error || "The extension did not respond." } : {}) });
     },
     beginRequest() {
       ++probe;

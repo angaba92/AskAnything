@@ -62,8 +62,15 @@ const NON_CLIENT_FACING_PATTERNS: RegExp[] = [
 
 // Recognize a research-status statement by its subject/action/object, not by
 // enumerating adjectives such as "comprehensive", "concrete" or "limited".
-const RESEARCH_STATUS =
-  /^(?:(?:now|first|next|finally)[,:]?\s+)?i(?:['’]ve)?\s+(?:now\s+)?(?:have|had|found|gathered|collected|located|identified|reviewed|obtained)\b[^.!?\n]*\b(?:information|documentation|sources?|resources?|materials?|evidence|details|context|understanding)\b/i;
+const RESEARCH_OBJECT =
+  "information|documentation|sources?|resources?|materials?|references?|evidence|details?|context|understanding|insights?|" +
+  "data|metrics?|figures?|numbers?|statistics|benchmarks?|specifications?|results?|findings?|visibility|coverage";
+const RESEARCH_STATUS = new RegExp(
+  `^(?:(?:now|first|next|finally)[,:]?\\s+)?i(?:['’]ve)?\\s+(?:now\\s+)?` +
+    `(?:have|had|found|gathered|collected|located|identified|reviewed|obtained|uncovered|come across|was able to find|se[ae]n)\\b` +
+    `[^.!?\\n]*\\b(?:${RESEARCH_OBJECT})\\b`,
+  "i",
+);
 const RESEARCH_UNCERTAINTY =
   /\b(?:limited|little|insufficient|missing|incomplete|unavailable|unable|cannot|could not|not|no|only)\b/i;
 
@@ -117,7 +124,9 @@ export function extractConfidenceReview(text: string): ConfidenceReview {
 const PROCESS_ONLY_LINE_PATTERNS: RegExp[] = [
   /^\s*(?:perfect|great|certainly|sure)[.!,:]/i,
   /^\s*(?:now\s+)?(?:i|we) (?:now )?have (?:sufficient|concrete|enough|the necessary) information\b/i,
-  /^\s*(?:i|we) can provide (?:the )?(?:following )?(?:answer|response|information)\b/i,
+  // "I can provide a comprehensive answer about X" is assistant chatter, not a
+  // limitation: it is dropped silently instead of being flagged for review.
+  /^\s*(?:i|we)\s+(?:can|could|will|shall|(?:am|are) (?:now )?(?:able|ready) to)\s+(?:now\s+)?(?:provide|offer|give|share|present|deliver|summari[sz]e|outline|address)\b[^.!?\n]*\b(?:answer|response|overview|summary|information|details?|explanation|picture|question)\b/i,
   /\blet me (?:compose|craft|prepare|write|formulate|summarize|provide)\b/i,
   /^\s*(?:here|below) (?:is|are) (?:the|an|our) (?:final |rfp[-\s]?ready )?(?:answer|response)\b/i,
   /^\s*based on\b.*\b(?:i|we) can (?:now )?(?:provide|compose|craft|prepare|write|formulate|summarize)\b/i,
@@ -201,7 +210,7 @@ export function stripNonClientFacingSentences(text: string): string {
 const DOCUMENTATION_GAP =
   /\bnot\s+(?:(?:publicly|explicitly|fully|comprehensively|currently)\s+)?(?:documented|described|disclosed|published|detailed|quantified|specified|verified|confirmed|substantiated)\b|\b(?:documentation|sources?|information)\b[^.!?\n]*\b(?:does not|do not|cannot|can't|lack|lacks|missing|unavailable)\b|\b(?:metrics?|figures?|benchmarks?|specifications?)\b[^.!?\n]*\bnot available\b/i;
 const SOURCE_COMMENTARY =
-  /^(?:however[, ]+)?(?:the\s+)?(?:(?:available|public|published|accessible|provided|developer|technical|internal|product)\s+)*(documentation|sources?|resources?|materials?|references?|evidence|search results?|knowledge base)\s+(covers?|describes?|mentions?|references?|includes?|contains?|provides?|details?|does|do|is|are|lacks?)\b/i;
+  /^(?:however[, ]+)?(?:the\s+)?(?:(?:available|public|published|accessible|provided|developer|technical|internal|product)\s+)*(documentation|sources?|resources?|materials?|references?|evidence|search results?|knowledge base)\s+(covers?|describes?|mentions?|references?|includes?|contains?|provides?|details?|does|do|is|are|lacks?|omits?|focus(?:es|ed)?|emphasi[sz]es?|discuss(?:es)?|address(?:es)?|outlines?|explains?|highlights?|indicates?|suggests?|shows?|states?|notes?|confirms?|offers?|lists?)\b/i;
 const INTERNAL_REFERRAL =
   /\b(?:contact|consult|reach out to|work(?:ing)? with|speak (?:to|with))\b[^.!?\n]*\b(?:account (?:representative|team|manager)|technical (?:support|consultation)|(?:sales|support|legal|implementation|product) team)\b|\b(?:account representative|sales team|support team|technical consultation)\b[^.!?\n]*\b(?:provide|available|confirm|details|specifications)\b/i;
 

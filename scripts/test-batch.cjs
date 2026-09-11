@@ -35,6 +35,18 @@ const openingRegressions = [
     body: "Dynamic Yield's SDK delivers personalized experiences with minimal latency through a multi-stage process: the SDK sends a decision request to Dynamic Yield servers, the decision engine evaluates audience and campaign conditions in real time, then the personalization decision is returned, and the variation is applied to the page.",
     review: true,
   },
+  {
+    name: "SDK data gap plus source focus",
+    preamble: "I found limited specific data on exact SDK file sizes and initialization overhead metrics. The available documentation focuses on performance optimization strategies rather than baseline SDK footprint specifications.",
+    body: "Dynamic Yield offers web and mobile SDKs designed with performance optimization as a core principle. The platform provides multiple implementation approaches—including lightweight API-only options and full SDK implementations—to accommodate varying performance requirements and use cases.",
+    review: true,
+  },
+  {
+    name: "capability-to-answer chatter",
+    preamble: "I can provide a comprehensive answer about Dynamic Yield's network request overhead and optimization capabilities.",
+    body: "Mastercard Dynamic Yield (DY) minimizes network overhead through intelligent request batching, caching, and conditional execution. The platform typically adds a small number of network calls per page load, with core requests batched together and impression/click beacons optimized for fire-and-forget delivery.",
+    review: false,
+  },
 ];
 
 for (const example of openingRegressions) {
@@ -44,7 +56,12 @@ for (const example of openingRegressions) {
         const result = normalize(example.preamble + separator + example.body, { mode, customPrompt: "Keep the requested format." });
         assert.equal(result.answer, example.body);
         assert.equal(result.reviewRequired, example.review);
-        if (example.review) assert.ok(result.reviewReason.includes(example.preamble));
+        if (example.review) {
+          // Each removed sentence is listed on its own line in Review.
+          for (const sentence of example.preamble.split(/(?<=[.!?])\s+(?=[A-Z])/)) {
+            assert.ok(result.reviewReason.includes(sentence), sentence);
+          }
+        }
       });
     }
   }
@@ -56,9 +73,23 @@ test("research-status detection tolerates adjectives without altering genuine ve
     "Now I have detailed technical context for the response.",
     "I've gathered comprehensive information about request batching.",
     "I found very little publicly accessible information on latency.",
+    "I found limited specific data on exact SDK file sizes.",
+    "I can provide a detailed overview of the platform.",
   ]) {
     const answer = "We use visitor information to select experiences. Resources are cached by the browser. The available API resources support SDK version 2.3.";
     assert.equal(normalize(`${preamble}\n\n${answer}`).answer, answer);
+  }
+});
+
+test("vendor statements that resemble source or capability commentary are preserved", () => {
+  for (const sentence of [
+    "Dynamic Yield provides a comprehensive answer engine for merchandising rules.",
+    "Customers can provide product feed details through the Data Feed API.",
+    "Reports focus on revenue per user and conversion rate.",
+    "The recommendation engine shows related products within 100 milliseconds.",
+    "Our platform can deliver personalized details to every visitor segment.",
+  ]) {
+    assert.equal(normalize(sentence).answer, sentence, sentence);
   }
 });
 

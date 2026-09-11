@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { bridgeHealth } from "@/lib/bridgeHealth";
-import { isExtensionBridgeAvailable } from "@/lib/extensionBridge";
 import { useBridgeHealth } from "@/lib/useBridgeHealth";
 
 const TONES = {
@@ -32,15 +30,6 @@ export default function BridgeStatus({ busy, testing, onTest, onStop }: {
   useEffect(() => {
     const hosted = !["localhost", "127.0.0.1"].includes(window.location.hostname);
     setRequired(hosted);
-    if (!hosted) return;
-    const detect = () => {
-      if (!["discovering", "requesting", "processing"].includes(bridgeHealth.getSnapshot().phase)) {
-        void isExtensionBridgeAvailable();
-      }
-    };
-    detect();
-    window.addEventListener("focus", detect);
-    return () => window.removeEventListener("focus", detect);
   }, []);
 
   const stamp = (time: number | null) => time === null ? "Not yet" : new Date(time).toLocaleString();
@@ -80,10 +69,15 @@ export default function BridgeStatus({ busy, testing, onTest, onStop }: {
       <p className="text-xs text-gray-500">
         Extension detected is only a PING, not proof of VPN or KA access. Green means the last KA request
         and app processing succeeded; it expires after 60 seconds. No automatic KA requests are sent.
+        Extension detection refreshes every 5 seconds while this view is visible and idle.
         Each manual check makes one minimal KA request.
       </p>
       <dl className="grid gap-4 text-sm sm:grid-cols-2">
-        <div><dt className="text-xs text-gray-500">Extension (PING)</dt><dd>{state.extension} - {stamp(state.extensionCheckedAt)}</dd></div>
+        <div><dt className="text-xs text-gray-500">Extension (PING only, not KA)</dt>
+          <dd role="status" className={state.extension === "detected" ? "text-blue-700" : ""}>
+            {state.extension === "detected" ? "Extension OK" : state.extension === "missing" ? "Extension not detected" : "Checking extension..."} - {stamp(state.extensionCheckedAt)}
+          </dd>
+        </div>
         <div><dt className="text-xs text-gray-500">KA response in latest request</dt><dd>{stamp(state.kaRespondedAt)}</dd></div>
         <div><dt className="text-xs text-gray-500">Last successful KA + app request</dt><dd>{stamp(state.lastSuccessAt)}</dd></div>
         <div><dt className="text-xs text-gray-500">{active ? "Current request elapsed" : "Last successful request duration"}</dt>

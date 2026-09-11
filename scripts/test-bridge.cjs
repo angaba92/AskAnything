@@ -78,7 +78,11 @@ function setup() {
     },
   };
   const shared = {
-    window, AbortController, DOMException, URL, Error,
+    window, document: {
+      visibilityState: "visible",
+      addEventListener: window.addEventListener,
+      removeEventListener: window.removeEventListener,
+    }, AbortController, DOMException, URL, Error,
     console: { ...console, warn: (...args) => warnings.push(args) },
   };
   const exports = {};
@@ -232,7 +236,7 @@ function setup() {
     }
   }
   return {
-    exports, health, window, posts, fetches, timers, listeners, runtimeMessages, portMessages, ports, warnings,
+    exports, health, window, document: shared.document, posts, fetches, timers, listeners, runtimeMessages, portMessages, ports, warnings,
     addExtension, addLegacy, tick, clean,
   };
 }
@@ -251,6 +255,87 @@ function fixture(index) {
     clean: () => state.clean(baseline),
   };
 }
+
+test("health: extension recovery clears only extension errors and never restores old KA confirmation", () => {
+  const store = healthExports.createBridgeHealthStore();
+  const ticket = store.beginRequest();
+  store.selected(ticket, { extensionId: "one" });
+  store.kaResponded(ticket);
+  store.succeed(ticket);
+  store.completeProbe(store.beginProbe(), null, "Extension reloading");
+  store.completeProbe(store.beginProbe(), { extensionId: "one" });
+  assert.equal(store.getSnapshot().extension, "detected");
+  assert.equal(store.getSnapshot().error, null);
+  assert.equal(store.getSnapshot().phase, "untested");
+  assert.equal(healthExports.bridgeHealthSummary(store.getSnapshot(), Date.now()).tone, "warning");
+  for (const stage of ["ka", "app", "answer"]) {
+    const request = store.beginRequest();
+    store.fail(request, stage, `${stage} failed`);
+    store.completeProbe(store.beginProbe(), null, "Reloading");
+    store.completeProbe(store.beginProbe(), { extensionId: "one" });
+    assert.equal(store.getSnapshot().extension, "detected");
+    assert.equal(store.getSnapshot().errorStage, stage);
+    assert.equal(store.getSnapshot().error, `${stage} failed`);
+  }
+});
+
+test("monitor: detects extension loaded after failed PING, without a KA request or focus change", async () => {
+  const state = setup();
+  state.window.location.hostname = "hosted.example";
+  const stop = state.exports.watchExtensionBridge();
+  const stopSecond = state.exports.watchExtensionBridge();
+  assert.equal(state.posts.length, 1, "consumers share a single monitor");
+  await state.tick(5000);
+  assert.equal(state.health.getSnapshot().extension, "missing");
+  state.addExtension(bridges[0], "reloaded");
+  await state.tick(5000);
+  assert.equal(state.health.getSnapshot().extension, "detected");
+  assert.equal(state.health.getSnapshot().phase, "untested");
+  assert.equal(state.health.getSnapshot().error, null);
+  assert.equal(state.fetches.length, 0, "polling must never call KA");
+  stop();
+  stop();
+  await state.tick(5000);
+  const count = state.posts.length;
+  stopSecond();
+  await state.tick(10000);
+  assert.equal(state.posts.length, count);
+  state.clean();
+});
+
+test("monitor: hidden views and active requests pause PING, unmount cancels pending discovery", async () => {
+  const state = setup();
+  state.window.location.hostname = "hosted.example";
+  state.document.visibilityState = "hidden";
+  const stop = state.exports.watchExtensionBridge();
+  await state.tick(10000);
+  assert.equal(state.posts.length, 0);
+  state.document.visibilityState = "visible";
+  await state.tick(5000);
+  assert.equal(state.posts.length, 1);
+  const ticket = state.health.beginRequest();
+  await flush();
+  await state.tick(10000);
+  assert.equal(state.posts.length, 1);
+  assert.equal(state.health.getSnapshot().phase, "discovering");
+  state.health.cancel(ticket);
+  await state.tick(5000);
+  assert.equal(state.posts.length, 2);
+  stop();
+  await flush();
+  assert.equal(state.health.getSnapshot().phase, "cancelled");
+  state.clean();
+});
+
+test("monitor: localhost does not probe the unused extension", async () => {
+  const state = setup();
+  state.window.location.hostname = "localhost";
+  const stop = state.exports.watchExtensionBridge();
+  await state.tick(10000);
+  assert.equal(state.posts.length, 0);
+  stop();
+  state.clean();
+});
 
 test("health: PING alone never confirms KA, and success expires without additional requests", () => {
   let now = 1000;
