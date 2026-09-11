@@ -83,9 +83,10 @@ export const MODE_HINTS: Record<AnswerMode, string> = {
  * enforceBullets, así que aquí basta con describir la forma deseada.
  */
 const KA_STYLE_INSTRUCTIONS: Record<AnswerMode, string | null> = {
-  // "simple" no lleva estructura: prosa breve y directa (ideal para celdas).
+  // "simple" no lleva estructura: prosa breve y directa (ideal para celdas), pero
+  // la exactitud y la cobertura de la pregunta mandan sobre la brevedad.
   simple:
-    'Answer in 1-2 direct plain sentences, followed by a final line starting "Sources: " with the full supporting URL(s) separated by "; ". No headings, bullets, or Markdown. Omit the Sources line only if no URL is available.',
+    'Answer in concise plain prose with no headings, bullets, or Markdown. Aim for 2-4 sentences, but completeness and accuracy always take priority over brevity: include every material fact, number, endpoint, condition, and qualifier needed for the answer to be correct, and cover every part of a multi-part question. Never drop, round, or approximate a figure just to stay short, and never omit a relevant capability. Finish with a final line starting "Sources: " with the full supporting URL(s) separated by "; ". Omit the Sources line only if no URL is available.',
   detailed:
     'Answer in plain prose (no markdown headings, no bullet points). Start with one paragraph that answers directly, then 3-4 paragraphs of depth, then one paragraph with a concrete real-world example. Finish with a single line "Sources: " listing the full URL(s) separated by "; " (omit the line if you have none).',
   bulleted:
