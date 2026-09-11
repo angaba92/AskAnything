@@ -13,6 +13,7 @@ import {
   buildKaUserContent,
   extractConfidenceNote,
   extractConfidenceReview,
+  extractSourceUrls,
   hasNonClientFacingLanguage,
   isClarificationRequest,
   isInternalSourceUrl,
@@ -42,7 +43,7 @@ export function normalizeBridgedKaResponse(
   let answer = isCustomMode
     ? note.text.trim()
     : stripInternalSourceLinks(
-        plainifyAnswer(stripNonClientFacingPreamble(note.text)),
+        plainifyAnswer(stripNonClientFacingPassages(note.text)),
       );
   const normalizedConfidence =
     opts.confidenceReview && !isCustomMode
@@ -60,9 +61,16 @@ export function normalizeBridgedKaResponse(
     : separateReviewLimitations(answer);
   answer = separated.answer;
 
-  const urls = sources
-    .map((source) => source.uri)
-    .filter((url): url is string => Boolean(url));
+  const urls = Array.from(
+    new Set([
+      ...sources
+        .map((source) => source.uri)
+        .filter((url): url is string => Boolean(url)),
+      // El filtro de bloques elimina la línea "Sources: …"; recuperamos sus URLs
+      // del texto original para no perder las citas.
+      ...extractSourceUrls(rawText),
+    ]),
+  ).filter((url) => !isInternalSourceUrl(url));
   const sourcesText = urls.join("; ");
   if (urls.length > 0 && !/https?:\/\//.test(answer)) {
     answer = answer ? `${answer}\n\nSources: ${sourcesText}` : `Sources: ${sourcesText}`;
@@ -227,7 +235,10 @@ ${originalDraft}`;
   }
   if (mode === "bulleted") answer = enforceBullets(answer);
   if (!isCustomMode && hasNonClientFacingLanguage(answer)) {
-    // Señalamos la revisión pero NO recortamos: la respuesta de KA se respeta.
+    // Misma limpieza que el camino puenteado: quitamos solo los bloques internos
+    // (nunca la respuesta entera) y marcamos la revisión.
+    const salvaged = plainifyAnswer(stripNonClientFacingPassages(answer));
+    if (salvaged) answer = salvaged;
     reviewRequired = true;
     if (!reviewReason) {
       reviewReason =
@@ -248,10 +259,12 @@ ${originalDraft}`;
     }
   }
 
-  const urls = res.sources
-    .map((s) => s.uri)
-    .filter((u): u is string => Boolean(u))
-    .filter((u) => !isInternalSourceUrl(u));
+  const urls = Array.from(
+    new Set([
+      ...res.sources.map((s) => s.uri).filter((u): u is string => Boolean(u)),
+      ...extractSourceUrls(res.text),
+    ]),
+  ).filter((u) => !isInternalSourceUrl(u));
   const sourcesText = urls.join("; ");
 
   // Si el modelo citó fuentes en el bloque "## Sources" pero no dejó ninguna URL

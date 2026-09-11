@@ -13,6 +13,7 @@ export const CLIENT_FACING_RFP_POLICY = `CLIENT-FACING RFP RULES (mandatory):
 - Do not invent facts, commitments, certifications, awards, analyst positions, operational events, or contractual terms.
 - Frame the client-facing answer positively around supported capabilities. Never open with "Partially.", "No.", or a limitation. Put uncertainty or missing evidence in the internal confidence-review signal, not in the opening.
 - Never convert missing evidence into a negative factual claim such as "does not maintain", "has not received", "there are no", or "no material events". Lack of evidence is not evidence of absence.
+- Answer regional and jurisdictional questions with what IS supported. If the exact country asked about has no local facility or endpoint but the region is served from another supported location (for example, UK traffic served from the EU data centre in Germany), state the supported arrangement and how it serves that market. Never answer "no" or "not available" when a supported regional option exists.
 - ALWAYS provide the best supported substantive answer available. Never replace the whole answer with a generic NDA, due-diligence, documentation-gap, or contact-us statement.
 - If exact details are unavailable, answer positively at the strongest supported level and place the precise missing or uncertain details ONLY in the internal CONFIDENCE_REVIEW reason.
 - Use an authoritative vendor voice ("Mastercard Dynamic Yield" or "we"), not an assistant/researcher voice ("I searched", "I found", "I could not find").
@@ -277,6 +278,20 @@ export function stripInternalSourceLinks(text: string): string {
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/** URLs citadas en líneas de fuentes ("Sources: …", "For more information…"). */
+export function extractSourceUrls(text: string): string[] {
+  const urls: string[] = [];
+  for (const line of (text ?? "").split(/\r?\n/)) {
+    if (!/^\s*(?:[•*-]\s*)?(?:sources?|references?|for more information)\b/i.test(line)) {
+      continue;
+    }
+    for (const url of line.match(/https?:\/\/[^\s)\];,]+/g) ?? []) {
+      if (!isInternalSourceUrl(url) && !urls.includes(url)) urls.push(url);
+    }
+  }
+  return urls;
+}
+
 export interface SeparatedReviewLimitations {
   answer: string;
   limitations: string[];
@@ -294,12 +309,35 @@ export function separateReviewLimitations(
   text: string,
 ): SeparatedReviewLimitations {
   const limitations: string[] = [];
+  const answerBlocks: string[] = [];
 
   for (const rawBlock of (text ?? "").split(/\n{2,}/)) {
-    const block = rawBlock.trim();
+    let block = rawBlock.trim();
     if (!block) continue;
-    if (REVIEW_ONLY_LIMITATION.test(block)) limitations.push(block);
+
+    // Coletilla final del tipo "…; however, X is not documented": el contenido
+    // positivo se queda y solo la salvedad viaja a Needs Review.
+    const transition = block.search(
+      /[;,]?\s*\b(?:however|nevertheless|that said|although|while these capabilities are supported)\b,?\s/i,
+    );
+    if (transition > 0) {
+      const tail = block.slice(transition).trim();
+      if (REVIEW_ONLY_LIMITATION.test(tail)) {
+        limitations.push(tail.replace(/^[;,]\s*/, ""));
+        block = block.slice(0, transition).trim().replace(/[;,]$/, "");
+        if (block && !/[.!?]$/.test(block)) block += ".";
+      }
+    }
+
+    if (!block) continue;
+    if (REVIEW_ONLY_LIMITATION.test(block)) {
+      limitations.push(block);
+      continue;
+    }
+    answerBlocks.push(block);
   }
 
-  return { answer: (text ?? "").trim(), limitations };
+  const answer = answerBlocks.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+  // Nunca devolvemos vacío: si todo era salvedad, se conserva el texto original.
+  return { answer: answer || (text ?? "").trim(), limitations };
 }

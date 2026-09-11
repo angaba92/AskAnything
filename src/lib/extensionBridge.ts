@@ -74,13 +74,27 @@ export async function askKaViaExtension(
   },
 ): Promise<string> {
   const content = buildKaUserContent(question, opts);
-  const response = await requestBridge(
-    "KA_REQUEST",
-    {
-      messages: [{ role: "user", content }],
-    },
-    190000,
-  );
+  const payload = { messages: [{ role: "user", content }] };
+
+  // KA responde en ~20s. Un timeout corto deja de confundir "service worker
+  // dormido" (típico en incógnito) con "KA lento": si falla, despertamos el
+  // worker con un PING y reintentamos una sola vez.
+  const attempt = () => requestBridge("KA_REQUEST", payload, 120000);
+
+  let response: BridgeResponse;
+  try {
+    response = await attempt();
+  } catch (firstError) {
+    await isExtensionBridgeAvailable();
+    try {
+      response = await attempt();
+    } catch {
+      throw firstError instanceof Error
+        ? firstError
+        : new Error("Knowledge Assistant bridge failed.");
+    }
+  }
+
   if (!response.ok || typeof response.text !== "string") {
     throw new Error(response.error || "Knowledge Assistant bridge failed.");
   }

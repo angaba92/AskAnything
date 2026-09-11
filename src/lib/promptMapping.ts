@@ -27,6 +27,7 @@ import {
   stripNonClientFacingPreamble,
   stripNonClientFacingPassages,
   extractConfidenceNote,
+  extractSourceUrls,
   isInternalSourceUrl,
   stripInternalSourceLinks,
 } from "./responsePolicy";
@@ -43,6 +44,7 @@ export {
   stripNonClientFacingPreamble,
   stripNonClientFacingPassages,
   extractConfidenceNote,
+  extractSourceUrls,
   isInternalSourceUrl,
   stripInternalSourceLinks,
 };

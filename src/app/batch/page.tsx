@@ -124,7 +124,14 @@ export default function BatchPage() {
     redoRow,
     redoingRow,
     queuedRedoRows,
+    testBridge,
+    bridgeTest,
+    testingBridge,
+    logs,
+    clearLogs,
   } = useBatch();
+
+  const [activeTab, setActiveTab] = useState<"rows" | "logs">("rows");
 
   const [url, setUrl] = useState("");
   const [dragOver, setDragOver] = useState(false);
@@ -465,10 +472,23 @@ export default function BatchPage() {
           <span className="rounded-lg bg-brand px-2.5 py-1 text-xs text-white">
             Knowledge Assistant
           </span>
+          <button
+            type="button"
+            onClick={testBridge}
+            disabled={testingBridge || running}
+            className="rounded-lg border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+          >
+            {testingBridge ? "Testing bridge…" : "Test bridge"}
+          </button>
           <span className="text-[11px] text-gray-400">
             Uses the Dynamic Yield Knowledge Assistant.
           </span>
         </div>
+        {bridgeTest && (
+          <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+            {bridgeTest}
+          </p>
+        )}
 
         {/* Source: drag & drop / upload OR OneDrive link */}
         <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
@@ -643,8 +663,101 @@ export default function BatchPage() {
         )}
       </div>
 
-      {rows.length > 0 && (
-        <div className="mt-5 overflow-x-auto rounded-xl border border-gray-200 bg-white">
+      {(rows.length > 0 || logs.length > 0) && (
+        <div className="mt-5 flex items-center gap-2 border-b border-gray-200">
+          <button
+            type="button"
+            onClick={() => setActiveTab("rows")}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${
+              activeTab === "rows"
+                ? "border-brand text-brand"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Rows ({rows.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("logs")}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${
+              activeTab === "logs"
+                ? "border-brand text-brand"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Logs ({logs.length})
+          </button>
+        </div>
+      )}
+
+      {activeTab === "logs" && (
+        <div className="mt-3 rounded-xl border border-gray-200 bg-white">
+          <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2">
+            <span className="text-xs text-gray-500">
+              Newest last · kept for this session only
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const text = logs
+                    .map(
+                      (l) =>
+                        `${new Date(l.time).toLocaleTimeString()}\t${l.level.toUpperCase()}\t${
+                          l.row ? `row ${l.row}` : "-"
+                        }\t${l.message}`,
+                    )
+                    .join("\n");
+                  navigator.clipboard?.writeText(text);
+                }}
+                disabled={logs.length === 0}
+                className="rounded-lg border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              >
+                Copy
+              </button>
+              <button
+                type="button"
+                onClick={clearLogs}
+                disabled={logs.length === 0}
+                className="rounded-lg border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          {logs.length === 0 ? (
+            <p className="p-4 text-sm text-gray-500">
+              No activity yet. Start a run or press Test bridge.
+            </p>
+          ) : (
+            <ul className="max-h-[420px] overflow-y-auto p-2 font-mono text-xs">
+              {logs.map((l, i) => (
+                <li
+                  key={i}
+                  className={`flex gap-2 border-b border-gray-100 px-1 py-1 last:border-0 ${
+                    l.level === "error"
+                      ? "text-red-700"
+                      : l.level === "warn"
+                        ? "text-amber-700"
+                        : "text-gray-600"
+                  }`}
+                >
+                  <span className="shrink-0 text-gray-400">
+                    {new Date(l.time).toLocaleTimeString()}
+                  </span>
+                  <span className="w-16 shrink-0 text-gray-400">
+                    {l.row ? `row ${l.row}` : ""}
+                  </span>
+                  <span className="break-all">{l.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {activeTab === "rows" && rows.length > 0 && (
+        <div className="mt-3 overflow-x-auto rounded-xl border border-gray-200 bg-white">
           <table className="w-full table-fixed text-left text-sm">
             <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase text-gray-500">
               <tr>

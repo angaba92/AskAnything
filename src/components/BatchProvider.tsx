@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useRef,
   useState,
@@ -27,6 +28,13 @@ export interface BatchRow {
   status: "pending" | "running" | "done" | "error" | "skipped";
   /** Marca de tiempo del último Redo, para distinguir un review recalculado. */
   redoneAt?: number;
+}
+
+export interface BatchLogEntry {
+  time: number;
+  level: "info" | "warn" | "error";
+  row?: number;
+  message: string;
 }
 
 export interface SpreadsheetColumn {
@@ -92,6 +100,12 @@ interface BatchContextValue {
   redoRow: (rowIndex: number, guidance: string) => Promise<void>;
   redoingRow: number | null;
   queuedRedoRows: number[];
+  /** Diagnóstico: hace un PING y una petición real mínima al Knowledge Assistant. */
+  testBridge: () => Promise<void>;
+  bridgeTest: string | null;
+  testingBridge: boolean;
+  logs: BatchLogEntry[];
+  clearLogs: () => void;
 }
 
 const QUESTION_KEYS = [
@@ -169,6 +183,23 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [startRow, setStartRowState] = useState(1);
   const [redoingRow, setRedoingRow] = useState<number | null>(null);
   const [queuedRedoRows, setQueuedRedoRows] = useState<number[]>([]);
+  const [bridgeTest, setBridgeTest] = useState<string | null>(null);
+  const [testingBridge, setTestingBridge] = useState(false);
+  const [logs, setLogs] = useState<BatchLogEntry[]>([]);
+
+  /** Añade una entrada al log, acotado para no crecer sin límite. */
+  const log = useCallback(
+    (level: BatchLogEntry["level"], message: string, row?: number) => {
+      setLogs((prev) =>
+        [...prev, { time: Date.now(), level, message, row }].slice(-800),
+      );
+    },
+    [],
+  );
+
+  function clearLogs() {
+    setLogs([]);
+  }
   const redoQueue = useRef<Array<{ index: number; guidance: string }>>([]);
   const runningRef = useRef(false);
   const stopRef = useRef(false);
@@ -575,6 +606,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
     setRedoingRow(rowIndex);
     setError(null);
+    log("info", `Redo requested with extra source material.`, rowIndex + 1);
     try {
       const enrichedContext = [
         contextRef.current,
@@ -640,6 +672,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       });
     } catch (err) {
       setError(`Redo failed on row ${rowIndex + 1}: ${(err as Error).message}`);
+      log("error", `Redo failed: ${(err as Error).message}`, rowIndex + 1);
     } finally {
       setRedoingRow(null);
     }
@@ -674,6 +707,48 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  /**
+   * Diagnóstico del puente: comprueba el service worker y hace una petición real
+   * y mínima a KA, mostrando el error exacto en vez de dejar filas colgadas.
+   */
+  async function testBridge() {
+    setTestingBridge(true);
+    setBridgeTest("Testing…");
+    try {
+      const host = window.location.hostname;
+      if (["localhost", "127.0.0.1"].includes(host)) {
+        setBridgeTest("Running on localhost: the bridge is not used here.");
+        return;
+      }
+
+      const started = Date.now();
+      const available = await isExtensionBridgeAvailable();
+      if (!available) {
+        setBridgeTest(
+          "PING failed: the extension is not loaded in this window. " +
+            "In incognito, open chrome://extensions and enable 'Allow in Incognito', then reload the extension and this tab.",
+        );
+        return;
+      }
+
+      const text = await askKaViaExtension(
+        "Reply with the single word OK.",
+        { mode: "simple", confidenceReview: false },
+      );
+      const seconds = ((Date.now() - started) / 1000).toFixed(1);
+      setBridgeTest(
+        `Bridge OK in ${seconds}s. Knowledge Assistant replied: ` +
+          `${text.replace(/\s+/g, " ").trim().slice(0, 120)}`,
+      );
+      log("info", `Bridge test OK in ${seconds}s.`);
+    } catch (err) {
+      setBridgeTest(`Bridge failed: ${(err as Error).message}`);
+      log("error", `Bridge test failed: ${(err as Error).message}`);
+    } finally {
+      setTestingBridge(false);
+    }
+  }
+
   async function run() {
     if (rowsRef.current.length === 0 || running) return;
     setRunning(true);
@@ -690,10 +765,15 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     const useCorporateBridge = !["localhost", "127.0.0.1"].includes(
       window.location.hostname,
     );
+    log(
+      "info",
+      `Run started · style=${modeRef.current} · ${useCorporateBridge ? "via corporate bridge" : "direct (localhost)"}`,
+    );
     if (useCorporateBridge && !(await isExtensionBridgeAvailable())) {
       setError(
         "Corporate bridge not connected. Install/reload the AskAnything Chrome or Edge extension, connect to the VPN, and retry.",
       );
+      log("error", "Corporate bridge not connected. Run aborted.");
       setRunning(false);
       setStopping(false);
       return;
@@ -731,11 +811,14 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       });
 
       try {
+        const rowStarted = Date.now();
         const controller = new AbortController();
         abortRef.current = controller;
         const question = rowsRef.current[i].question;
+        log("info", `Asking: ${question.slice(0, 90)}`, i + 1);
         let localKaResponse: string | undefined;
         if (useCorporateBridge) {
+          const bridgeStarted = Date.now();
           localKaResponse = await askKaViaExtension(question, {
             mode: modeRef.current,
             context: contextRef.current || undefined,
@@ -745,6 +828,11 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
                 ? customPromptRef.current
                 : undefined,
           });
+          log(
+            "info",
+            `Bridge replied in ${((Date.now() - bridgeStarted) / 1000).toFixed(1)}s (${localKaResponse.length} chars)`,
+            i + 1,
+          );
         }
         // Sección (y por tanto hilo) de esta pregunta. Rotamos en cada intento.
         const section = BATCH_SECTIONS[rotation.current % BATCH_SECTIONS.length];
@@ -813,6 +901,14 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         // de fallos, para que un "unreachable" posterior se trate como transitorio.
         kaHealthyRef.current = true;
         kaUnreachableStreakRef.current = 0;
+        log(
+          data.reviewRequired ? "warn" : "info",
+          `Done in ${((Date.now() - rowStarted) / 1000).toFixed(1)}s` +
+            (data.reviewRequired
+              ? ` · needs review: ${String(data.reviewReason || "").slice(0, 120)}`
+              : ""),
+          i + 1,
+        );
         return "done";
       } catch (err) {
         if ((err as Error).name === "AbortError" || stopRef.current) {
@@ -825,6 +921,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           return "stopped";
         }
         rowLastErrors.current[i] = (err as Error).message;
+        log("error", `Failed: ${(err as Error).message}`, i + 1);
         setRows((prev) => {
           const next = [...prev];
           next[i] = {
@@ -935,6 +1032,11 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
             `Last error: ${rowLastErrors.current[i] ?? "unknown"}. ` +
             `Press Stop to cancel.`,
         );
+        log(
+          "warn",
+          `Cooldown ${Math.round(cooldownMs / 1000)}s after ${consecutiveErrors} consecutive errors.`,
+          i + 1,
+        );
         await interruptibleSleep(cooldownMs);
         if (stopRef.current) break;
         setError(null);
@@ -965,6 +1067,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
     setRunning(false);
     setStopping(false);
+    log(
+      "info",
+      stopRef.current ? "Run stopped by user." : "Run finished.",
+    );
   }
 
   function stop() {
@@ -1087,6 +1193,11 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     redoRow,
     redoingRow,
     queuedRedoRows,
+    testBridge,
+    bridgeTest,
+    testingBridge,
+    logs,
+    clearLogs,
   };
 
   return (

@@ -110,7 +110,7 @@ async function proxyKaRequest(messages, sender) {
       ok: false,
       error:
         (error?.name === "AbortError"
-          ? "Knowledge Assistant timed out after 40 seconds. "
+          ? "Knowledge Assistant timed out after 180 seconds. "
           : "Could not reach Knowledge Assistant. ") +
         "Connect to the corporate VPN and retry. " +
         (error instanceof Error ? error.message : ""),
