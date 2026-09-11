@@ -12,7 +12,8 @@ require.extensions[".ts"] = (module, filename) => module._compile(
   }).outputText, filename,
 );
 
-function harness() {
+function harness({ hostname = "demo.example", apiStatus = 200 } = {}) {
+  const health = require("../src/lib/bridgeHealth.ts").createBridgeHealthStore();
   const slots = [];
   let cursor = 0;
   const requests = [];
@@ -33,9 +34,16 @@ function harness() {
     },
   };
   const bridge = {
-    isExtensionBridgeAvailable: async () => true,
+    isExtensionBridgeAvailable: async () => {
+      health.completeProbe(health.beginProbe(), { extensionId: "test", transport: "port" });
+      return true;
+    },
     askKaViaExtension: (question, options) => new Promise((resolve, reject) => {
-      const job = { question, options, resolve, reject };
+      const ticket = health.beginRequest();
+      options.onRequestStarted?.(ticket);
+      health.selected(ticket, { extensionId: "test", transport: "port" });
+      const fail = (error) => { health.fail(ticket, "ka", error.message); reject(error); };
+      const job = { question, options, resolve: (answer) => { health.kaResponded(ticket); resolve(answer); }, reject: fail };
       requests.push(job);
       queued.push(job);
       options.signal?.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true });
@@ -52,6 +60,7 @@ function harness() {
     if (name === "next/navigation") return { usePathname: () => "/batch" };
     if (name === "next/link") return () => null;
     if (name === "@/lib/extensionBridge") return bridge;
+    if (name === "@/lib/bridgeHealth") return { bridgeHealth: health };
     if (name === "xlsx") return { ...XLSX, writeFile: (wb) => { exported = wb; } };
     if (name.startsWith("@/")) return require(path.resolve("src", name.slice(2)) + ".ts");
     return require(name);
@@ -61,12 +70,13 @@ function harness() {
   }
   vm.runInNewContext(compiled, {
     exports, require: localRequire, console, FileReader: Reader,
-    window: { location: { hostname: "demo.example" } },
+    window: { location: { hostname } },
     AbortController, DOMException, setTimeout, clearTimeout,
     setInterval: (callback) => setInterval(callback, 1), clearInterval,
     fetch: async (_url, init) => {
       if (init.signal?.aborted) throw new DOMException("Cancelled", "AbortError");
       const body = JSON.parse(init.body);
+      if (apiStatus !== 200) return Response.json({ error: "App failure" }, { status: apiStatus });
       if (body.localKaResponse === "EMPTY") return Response.json({
         error: "No substantive answer", reviewReason: "Latency unsupported",
       }, { status: 422 });
@@ -98,7 +108,7 @@ function harness() {
     }
     throw new Error("Scheduler did not reach expected state.");
   };
-  return { render, requests, queued, flush, waitFor, exported: () => exported };
+  return { render, health, requests, queued, flush, waitFor, exported: () => exported };
 }
 
 test("FIFO Redo priority, duplicate prevention, review replacement and workbook export", async () => {
@@ -121,6 +131,7 @@ test("FIFO Redo priority, duplicate prevention, review replacement and workbook 
   assert.equal(state.rows[1].answer, "A revised second answer.");
   assert.equal(state.rows[1].reviewApproved, false);
   assert.equal(state.running, false);
+  assert.equal(h.health.getSnapshot().phase, "ready");
   state.download();
   assert.equal(h.exported().Sheets.Questions.B3.v, "A revised second answer.");
   assert.equal(h.exported().Sheets.Questions.C3.v, "Updated review");
@@ -140,6 +151,7 @@ test("Stop aborts request, clears queued Redos and preserves completed rows", as
   assert.equal(state.rows[0].status, "pending");
   assert.equal(state.rows[1].answer, "Existing answer.");
   assert.equal(state.running, false);
+  assert.equal(h.health.getSnapshot().phase, "cancelled");
 });
 
 test("standalone Redos serialize and block Start and remapping synchronously", async () => {
@@ -176,4 +188,87 @@ test("quality failure advances without regenerating; Redo can repair failed rows
   h.queued.shift().resolve("A repaired first answer.");
   await redo;
   assert.equal(h.render().rows[0].status, "done");
+});
+
+test("bridge check makes one KA request and includes application processing", async () => {
+  const h = harness();
+  const checking = h.render().testBridge();
+  await h.waitFor(() => h.queued.length === 1);
+  await h.render().run();
+  assert.match(h.render().error, /active request/);
+  h.queued.shift().resolve("Connection check successful.");
+  await checking;
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.health.getSnapshot().phase, "ready");
+  assert.match(h.render().bridgeTest, /KA and app responded/);
+  assert.equal(h.render().testingBridge, false);
+});
+
+test("bridge checks expose application authentication errors instead of a false success", async () => {
+  const h = harness({ apiStatus: 401 });
+  const checking = h.render().testBridge();
+  await h.waitFor(() => h.queued.length === 1);
+  h.queued.shift().resolve("Connection check successful.");
+  await checking;
+  assert.equal(h.health.getSnapshot().phase, "error");
+  assert.equal(h.health.getSnapshot().errorStage, "app");
+  assert.notEqual(h.health.getSnapshot().kaRespondedAt, null);
+  assert.equal(h.health.getSnapshot().lastSuccessAt, null);
+  assert.match(h.render().bridgeTest, /authentication/);
+});
+
+test("ordinary batch API failure updates bridge health and pauses without regenerating", async () => {
+  const h = harness({ apiStatus: 503 });
+  const run = h.render().run();
+  await h.waitFor(() => h.queued.length === 1);
+  h.queued.shift().resolve("A substantive first answer.");
+  await run;
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.health.getSnapshot().phase, "error");
+  assert.equal(h.health.getSnapshot().errorStage, "app");
+});
+
+test("Redo quality failure is not a transport failure and preserves the previous answer", async () => {
+  const h = harness();
+  const redo = h.render().redoRow(1, "Owner notes");
+  await h.waitFor(() => h.queued.length === 1);
+  h.queued.shift().resolve("EMPTY");
+  await redo;
+  assert.equal(h.health.getSnapshot().phase, "error");
+  assert.equal(h.health.getSnapshot().errorStage, "answer");
+  assert.notEqual(h.health.getSnapshot().kaRespondedAt, null);
+  assert.equal(h.render().rows[1].answer, "Existing answer.");
+});
+
+test("cancelled bridge check releases operation lock and never reports success", async () => {
+  const h = harness();
+  const checking = h.render().testBridge();
+  await h.waitFor(() => h.queued.length === 1);
+  h.render().stop();
+  await checking;
+  assert.equal(h.health.getSnapshot().phase, "cancelled");
+  assert.equal(h.health.getSnapshot().lastSuccessAt, null);
+  assert.equal(h.render().testingBridge, false);
+});
+
+test("localhost never pretends a skipped bridge test succeeded", async () => {
+  const h = harness({ hostname: "localhost" });
+  await h.render().testBridge();
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.health.getSnapshot().phase, "untested");
+  assert.match(h.render().bridgeTest, /not used here/);
+});
+
+test("empty raw KA answer advances as a quality failure instead of generating again", async () => {
+  const h = harness();
+  const { BatchRequestError } = require("../src/lib/batchResponse.ts");
+  const run = h.render().run();
+  await h.waitFor(() => h.queued.length === 1);
+  h.queued.shift().reject(new BatchRequestError("Knowledge Assistant returned an empty answer.", 422));
+  await h.waitFor(() => h.queued.length === 1);
+  assert.match(h.queued[0].question, /three/);
+  h.queued.shift().resolve("A substantive third answer.");
+  await run;
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.render().rows[0].status, "error");
 });

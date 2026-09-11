@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import MessageBubble from "@/components/MessageBubble";
+import { BridgeBadge } from "@/components/BridgeStatus";
+import { bridgeHealth } from "@/lib/bridgeHealth";
+import { BatchRequestError } from "@/lib/batchResponse";
 import {
   STATUSES,
   STATUS_LABEL,
@@ -33,7 +36,6 @@ export default function Home() {
   const [customPrompt, setCustomPrompt] = useState("");
   const [customPromptFileName, setCustomPromptFileName] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
-  const [bridgeConnected, setBridgeConnected] = useState(false);
   const [bridgeRequired, setBridgeRequired] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -62,21 +64,16 @@ export default function Home() {
       window.location.hostname,
     );
     setBridgeRequired(required);
-    if (!required) {
-      setBridgeConnected(false);
-      return;
-    }
+    if (!required) return;
 
-    let active = true;
     const check = () => {
-      isExtensionBridgeAvailable().then((connected) => {
-        if (active) setBridgeConnected(connected);
-      });
+      if (!["discovering", "requesting", "processing"].includes(bridgeHealth.getSnapshot().phase)) {
+        void isExtensionBridgeAvailable();
+      }
     };
     check();
     window.addEventListener("focus", check);
     return () => {
-      active = false;
       window.removeEventListener("focus", check);
     };
   }, []);
@@ -134,50 +131,59 @@ export default function Home() {
     );
 
     let localKaResponse: string | undefined;
+    let bridgeTicket: number | undefined;
     if (bridgeRequired) {
-      const connected =
-        bridgeConnected || (await isExtensionBridgeAvailable());
-      setBridgeConnected(connected);
-      if (!connected) {
-        setError(
-          "Corporate bridge not connected. Install/reload the AskAnything Chrome or Edge extension and connect to the VPN.",
-        );
-        setSending(false);
-        return;
-      }
       try {
         localKaResponse = await askKaViaExtension(text, {
           mode,
           customPrompt: mode === "custom" ? customPrompt : undefined,
+          onRequestStarted: (ticket) => { bridgeTicket = ticket; },
         });
       } catch (bridgeError) {
-        setBridgeConnected(false);
         setError((bridgeError as Error).message);
         setSending(false);
         return;
       }
     }
 
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        threadId: activeId,
-        message: text,
-        mode,
-        customPrompt: mode === "custom" ? customPrompt : undefined,
-        localKaResponse,
-      }),
-    });
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: activeId,
+          message: text,
+          mode,
+          customPrompt: mode === "custom" ? customPrompt : undefined,
+          localKaResponse,
+        }),
+      });
 
-    if (res.ok) {
-      await loadDetail(activeId);
-      await loadThreads();
-    } else {
-      const e = await res.json().catch(() => ({}));
-      setError(e.error ?? "Error sending the message");
+      if (!res.headers.get("content-type")?.includes("application/json")) {
+        throw new Error(`The app returned HTTP ${res.status} without JSON. Check app authentication.`);
+      }
+      const result: unknown = await res.json();
+      if (!result || typeof result !== "object") throw new Error("The app returned an invalid response.");
+      if (!res.ok) {
+        throw new BatchRequestError("error" in result && typeof result.error === "string" ? result.error : "Error sending the message", res.status);
+      } else {
+        if (!("messages" in result) || !Array.isArray(result.messages) ||
+            !result.messages.some((item: unknown) => item && typeof item === "object" &&
+              "role" in item && item.role === "ai" && "text" in item &&
+              typeof item.text === "string" && item.text.trim())) {
+          throw new BatchRequestError("No answer was returned.", 422);
+        }
+        if (bridgeTicket !== undefined) bridgeHealth.succeed(bridgeTicket);
+        await loadDetail(activeId);
+        await loadThreads();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (bridgeTicket !== undefined) bridgeHealth.fail(bridgeTicket, err instanceof BatchRequestError && err.status === 422 ? "answer" : "app", message);
+      setError(message);
+    } finally {
+      setSending(false);
     }
-    setSending(false);
   }
 
   async function patchThread(data: Partial<{ status: string; tags: string[]; title: string }>) {
@@ -276,17 +282,7 @@ export default function Home() {
               )}
               <div className="flex shrink-0 items-center gap-3">
                 {bridgeRequired && (
-                  <span
-                    className={`rounded-full px-2 py-1 text-[11px] font-medium ${
-                      bridgeConnected
-                        ? "bg-emerald-50 text-emerald-700"
-                        : "bg-amber-50 text-amber-700"
-                    }`}
-                  >
-                    {bridgeConnected
-                      ? "Corporate bridge connected"
-                      : "Corporate bridge required"}
-                  </span>
+                  <BridgeBadge />
                 )}
                 <select
                   value={detail.status}

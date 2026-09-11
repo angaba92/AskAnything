@@ -1,6 +1,8 @@
 "use client";
 
 import { buildKaUserContent, type AnswerMode } from "./promptMapping";
+import { bridgeHealth, type BridgeIdentity } from "./bridgeHealth";
+import { BatchRequestError } from "./batchResponse";
 
 const PAGE_SOURCE = "askanything-page";
 const EXTENSION_SOURCE = "askanything-extension";
@@ -17,7 +19,7 @@ interface BridgeResponse {
   extensionVersion?: string;
 }
 
-export type BridgeConnection = Pick<BridgeResponse, "extensionId" | "extensionVersion" | "transport">;
+export type BridgeConnection = BridgeIdentity;
 
 async function requestBridge(
   type: "PING" | "KA_REQUEST" | "KA_REQUEST_V2",
@@ -95,11 +97,14 @@ async function requestBridge(
 }
 
 export async function isExtensionBridgeAvailable(): Promise<boolean> {
+  const probe = bridgeHealth.beginProbe();
   try {
     // Check the background worker, not just the injected content script.
     const response = await requestBridge("PING", {}, 5000);
+    bridgeHealth.completeProbe(probe, response);
     return response.ok;
-  } catch {
+  } catch (error) {
+    bridgeHealth.completeProbe(probe, null, error instanceof Error ? error.message : String(error));
     return false;
   }
 }
@@ -113,24 +118,39 @@ export async function askKaViaExtension(
     customPrompt?: string;
     signal?: AbortSignal;
     onBridgeSelected?: (connection: BridgeConnection) => void;
+    onRequestStarted?: (ticket: number) => void;
   },
 ): Promise<string> {
   const content = buildKaUserContent(question, opts);
   const payload = { messages: [{ role: "user", content }] };
 
-  const bridge = await requestBridge("PING", {}, 5000, opts.signal);
-  opts.onBridgeSelected?.(bridge);
-  const targeted = bridge.protocolVersion === 2 && !!bridge.extensionId;
-  // A distinct request type prevents older, untargetable extensions from also fetching KA.
-  const response = await requestBridge(
-    targeted ? "KA_REQUEST_V2" : "KA_REQUEST",
-    targeted ? { ...payload, extensionId: bridge.extensionId } : payload,
-    190000,
-    opts.signal,
-  );
-
-  if (!response.ok || typeof response.text !== "string") {
-    throw new Error(response.error || "Knowledge Assistant bridge failed.");
+  const ticket = bridgeHealth.beginRequest();
+  opts.onRequestStarted?.(ticket);
+  let selected = false;
+  try {
+    const bridge = await requestBridge("PING", {}, 5000, opts.signal);
+    selected = true;
+    bridgeHealth.selected(ticket, bridge);
+    opts.onBridgeSelected?.(bridge);
+    const targeted = bridge.protocolVersion === 2 && !!bridge.extensionId;
+    const response = await requestBridge(
+      targeted ? "KA_REQUEST_V2" : "KA_REQUEST",
+      targeted ? { ...payload, extensionId: bridge.extensionId } : payload,
+      190000,
+      opts.signal,
+    );
+    if (!response.ok || typeof response.text !== "string" ||
+        /^\s*(?:<!doctype html|<html\b)/i.test(response.text)) {
+      throw new Error(response.error || "Knowledge Assistant bridge failed: unexpected HTML response (possible login page).");
+    }
+    bridgeHealth.kaResponded(ticket);
+    if (!response.text.trim()) {
+      throw new BatchRequestError("Knowledge Assistant returned an empty answer.", 422);
+    }
+    return response.text;
+  } catch (error) {
+    if (opts.signal?.aborted) bridgeHealth.cancel(ticket, opts.signal.reason);
+    else bridgeHealth.fail(ticket, error instanceof BatchRequestError && error.status === 422 ? "answer" : selected ? "ka" : "extension", error instanceof Error ? error.message : String(error));
+    throw error;
   }
-  return response.text;
 }

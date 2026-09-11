@@ -60,9 +60,17 @@ const NON_CLIENT_FACING_PATTERNS: RegExp[] = [
   /^\s*(?:the )?documentation (?:references|describes|mentions)\b/i,
 ];
 
+// Recognize a research-status statement by its subject/action/object, not by
+// enumerating adjectives such as "comprehensive", "concrete" or "limited".
+const RESEARCH_STATUS =
+  /^(?:(?:now|first|next|finally)[,:]?\s+)?i(?:['’]ve)?\s+(?:now\s+)?(?:have|had|found|gathered|collected|located|identified|reviewed|obtained)\b[^.!?\n]*\b(?:information|documentation|sources?|resources?|materials?|evidence|details|context|understanding)\b/i;
+const RESEARCH_UNCERTAINTY =
+  /\b(?:limited|little|insufficient|missing|incomplete|unavailable|unable|cannot|could not|not|no|only)\b/i;
+
 /** Detecta lenguaje sobre búsquedas/limitaciones internas no apto para clientes. */
 export function hasNonClientFacingLanguage(text: string): boolean {
-  return NON_CLIENT_FACING_PATTERNS.some((pattern) => pattern.test(text));
+  return RESEARCH_STATUS.test(text.trim()) ||
+    NON_CLIENT_FACING_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 /** Fallback factual y client-facing cuando no hay soporte suficiente. */
@@ -172,7 +180,8 @@ export function stripNonClientFacingPreamble(text: string): string {
           .replace(/^\s*(?:perfect|great|certainly|sure)[.!,:]\s*/i, "")
           .replace(/^\s*(?:based on|according to)\b[^,;:\n]*\b(?:documentation|information|sources?|materials?|search|research|knowledge|guru)\b[^,;:\n]*[,;:]\s*/i, "")
           .replace(/^\s*(?:here|below) (?:is|are) (?:the|an|our) (?:final |rfp[-\s]?ready )?(?:answer|response)\s*:\s*/i, "");
-        return PROCESS_ONLY_LINE_PATTERNS.some((pattern) => pattern.test(value)) ? "" : value;
+        const statusOnly = RESEARCH_STATUS.test(value.trim()) && !RESEARCH_UNCERTAINTY.test(value);
+        return statusOnly || PROCESS_ONLY_LINE_PATTERNS.some((pattern) => pattern.test(value)) ? "" : value;
       }).filter(Boolean).join(" ");
     })
     .filter((line): line is string => line !== null);
@@ -192,13 +201,17 @@ export function stripNonClientFacingSentences(text: string): string {
 const DOCUMENTATION_GAP =
   /\bnot\s+(?:(?:publicly|explicitly|fully|comprehensively|currently)\s+)?(?:documented|described|disclosed|published|detailed|quantified|specified|verified|confirmed|substantiated)\b|\b(?:documentation|sources?|information)\b[^.!?\n]*\b(?:does not|do not|cannot|can't|lack|lacks|missing|unavailable)\b|\b(?:metrics?|figures?|benchmarks?|specifications?)\b[^.!?\n]*\bnot available\b/i;
 const SOURCE_COMMENTARY =
-  /^(?:however[, ]+)?(?:the\s+)?(?:(?:available|public|published|accessible|provided|developer|technical|internal|product)\s+)*(?:documentation|sources?|search results?|knowledge base)\s+(?:covers?|describes?|mentions?|references?|includes?|contains?|provides?|details?|does|do|is|are|lacks?)\b/i;
+  /^(?:however[, ]+)?(?:the\s+)?(?:(?:available|public|published|accessible|provided|developer|technical|internal|product)\s+)*(documentation|sources?|resources?|materials?|references?|evidence|search results?|knowledge base)\s+(covers?|describes?|mentions?|references?|includes?|contains?|provides?|details?|does|do|is|are|lacks?)\b/i;
 const INTERNAL_REFERRAL =
   /\b(?:contact|consult|reach out to|work(?:ing)? with|speak (?:to|with))\b[^.!?\n]*\b(?:account (?:representative|team|manager)|technical (?:support|consultation)|(?:sales|support|legal|implementation|product) team)\b|\b(?:account representative|sales team|support team|technical consultation)\b[^.!?\n]*\b(?:provide|available|confirm|details|specifications)\b/i;
 
 function editorialSentence(text: string): boolean {
   const value = text.replace(/^[\s•*#_`+-]+/, "").trim();
-  return DOCUMENTATION_GAP.test(value) || SOURCE_COMMENTARY.test(value) ||
+  const source = SOURCE_COMMENTARY.exec(value);
+  const sourceCommentary = source !== null &&
+    !(/^(?:resources?|materials?)$/i.test(source[1]) && /^(?:is|are)$/i.test(source[2]));
+  return RESEARCH_STATUS.test(value) ||
+    DOCUMENTATION_GAP.test(value) || sourceCommentary ||
     INTERNAL_REFERRAL.test(value) || isClarificationRequest(value) ||
     (/^(?:i|we|based on|the only)\b/i.test(value) && hasNonClientFacingLanguage(value));
 }

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useBatch } from "@/components/BatchProvider";
+import BridgeStatus from "@/components/BridgeStatus";
 import { ANSWER_MODES, MODE_LABELS, MODE_HINTS } from "@/lib/promptMapping";
 import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
 
@@ -97,13 +98,11 @@ export default function BatchPage() {
     newReviewColumnName,
     customPrompt,
     customPromptFileName,
-    fetching,
     startRow,
     setStartRow,
     setContext,
     setMode,
     loadFile,
-    loadFromUrl,
     setSelectedSheet,
     setHeaderRow,
     setMappingOpen,
@@ -125,15 +124,13 @@ export default function BatchPage() {
     redoingRow,
     queuedRedoRows,
     testBridge,
-    bridgeTest,
     testingBridge,
     logs,
     clearLogs,
   } = useBatch();
 
-  const [activeTab, setActiveTab] = useState<"rows" | "logs">("rows");
+  const [activeTab, setActiveTab] = useState<"rows" | "logs" | "bridge">("rows");
 
-  const [url, setUrl] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const busy = running || redoingRow !== null || testingBridge;
   const reviewCount = rows.filter(
@@ -475,23 +472,16 @@ export default function BatchPage() {
           </span>
           <button
             type="button"
-            onClick={testBridge}
-            disabled={busy}
+            onClick={() => setActiveTab("bridge")}
             className="rounded-lg border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
           >
-            {testingBridge ? "Testing bridge…" : "Test bridge"}
+            Bridge status
           </button>
           <span className="text-[11px] text-gray-400">
             Uses the Dynamic Yield Knowledge Assistant.
           </span>
         </div>
-        {bridgeTest && (
-          <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
-            {bridgeTest}
-          </p>
-        )}
 
-        {/* Source: drag & drop / upload OR OneDrive link */}
         <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
           <div
             onDragOver={(e) => {
@@ -528,37 +518,6 @@ export default function BatchPage() {
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="h-px flex-1 bg-gray-200" />
-            <span className="text-[11px] uppercase tracking-wide text-gray-400">
-              or paste a public OneDrive / SharePoint link
-            </span>
-            <div className="h-px flex-1 bg-gray-200" />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://…-my.sharepoint.com/:x:/g/personal/…"
-              className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none"
-            />
-            <button
-              type="button"
-              onClick={() => loadFromUrl(url)}
-              disabled={busy || fetching || !url.trim()}
-              className="rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
-            >
-              {fetching ? "Loading…" : "Load from link"}
-            </button>
-          </div>
-          <p className="text-[11px] text-gray-400">
-            Only works for links shared as <b>“anyone with the link”</b>. Links
-            restricted to <b>Mastercard sign-in cannot be imported
-            automatically</b> (they require a Microsoft login the server doesn’t
-            have) — download the file and drag it in instead.
-          </p>
         </div>
 
         {columns.length > 0 && (
@@ -665,8 +624,7 @@ export default function BatchPage() {
         )}
       </div>
 
-      {(rows.length > 0 || logs.length > 0) && (
-        <div className="mt-5 flex items-center gap-2 border-b border-gray-200">
+        <nav aria-label="Batch views" className="mt-5 flex items-center gap-2 border-b border-gray-200">
           <button
             type="button"
             onClick={() => setActiveTab("rows")}
@@ -689,7 +647,20 @@ export default function BatchPage() {
           >
             Logs ({logs.length})
           </button>
-        </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab("bridge")}
+            aria-current={activeTab === "bridge" ? "page" : undefined}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${
+              activeTab === "bridge" ? "border-brand text-brand" : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Bridge
+          </button>
+        </nav>
+
+      {activeTab === "bridge" && (
+        <BridgeStatus busy={busy} testing={testingBridge} onTest={testBridge} onStop={stop} />
       )}
 
       {activeTab === "logs" && (
@@ -729,7 +700,7 @@ export default function BatchPage() {
           </div>
           {logs.length === 0 ? (
             <p className="p-4 text-sm text-gray-500">
-              No activity yet. Start a run or press Test bridge.
+              No activity yet. Start a run or check the connection in Bridge.
             </p>
           ) : (
             <ul className="max-h-[420px] overflow-y-auto p-2 font-mono text-xs">

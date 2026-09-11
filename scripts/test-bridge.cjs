@@ -4,12 +4,21 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const ts = require("typescript");
+require.extensions[".ts"] = (module, filename) => module._compile(
+  ts.transpileModule(fs.readFileSync(filename, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, filename,
+);
 
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const pageCode = ts.transpileModule(read("src/lib/extensionBridge.ts"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
+const healthExports = {};
+vm.runInNewContext(ts.transpileModule(read("src/lib/bridgeHealth.ts"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { exports: healthExports });
 const bridges = [
   ["session capture", "extension/dy-session-capture/content.js", "extension/dy-session-capture/background.js", "extension/dy-session-capture/manifest.json"],
   ["demo bridge", "extension/dy-demo-bridge/content-scripts/askanything-bridge.js", "extension/dy-demo-bridge/bridge-background.js", "extension/dy-demo-bridge/manifest.json"],
@@ -73,10 +82,13 @@ function setup() {
     console: { ...console, warn: (...args) => warnings.push(args) },
   };
   const exports = {};
+  const health = healthExports.createBridgeHealthStore(() => now);
   vm.runInNewContext(pageCode, {
     ...shared, ...clock("tab"), exports,
     crypto: { randomUUID: () => `request-${++sequence}` },
     require: (name) => {
+      if (name === "./bridgeHealth") return { bridgeHealth: health };
+      if (name === "./batchResponse") return require("../src/lib/batchResponse.ts");
       assert.equal(name, "./promptMapping");
       return { buildKaUserContent: (question) => question };
     },
@@ -220,7 +232,7 @@ function setup() {
     }
   }
   return {
-    exports, window, posts, fetches, timers, listeners, runtimeMessages, portMessages, ports, warnings,
+    exports, health, window, posts, fetches, timers, listeners, runtimeMessages, portMessages, ports, warnings,
     addExtension, addLegacy, tick, clean,
   };
 }
@@ -239,6 +251,169 @@ function fixture(index) {
     clean: () => state.clean(baseline),
   };
 }
+
+test("health: PING alone never confirms KA, and success expires without additional requests", () => {
+  let now = 1000;
+  const store = healthExports.createBridgeHealthStore(() => now);
+  const summary = () => healthExports.bridgeHealthSummary(store.getSnapshot(), now);
+  store.completeProbe(store.beginProbe(), { extensionId: "one", transport: "port" });
+  assert.equal(summary().tone, "warning");
+  assert.equal(store.getSnapshot().lastSuccessAt, null);
+  const ticket = store.beginRequest();
+  assert.match(summary().label, /Checking/);
+  store.selected(ticket, { extensionId: "one", transport: "port" });
+  assert.match(summary().label, /Waiting/);
+  now += 7000;
+  store.kaResponded(ticket);
+  assert.equal(summary().tone, "info", "KA success alone must still wait for app processing");
+  store.succeed(ticket);
+  assert.equal(summary().tone, "success");
+  assert.equal(store.getSnapshot().lastDurationMs, 7000);
+  now += healthExports.BRIDGE_CONFIRMATION_TTL_MS;
+  assert.equal(summary().tone, "warning");
+  assert.match(summary().label, /expired/);
+});
+
+test("health: newer failures survive late results and successful PINGs", () => {
+  const store = healthExports.createBridgeHealthStore();
+  const old = store.beginRequest();
+  const oldProbe = store.beginProbe();
+  const current = store.beginRequest();
+  store.selected(current, { extensionId: "one", transport: "port" });
+  store.fail(current, "ka", "Channel closed");
+  store.kaResponded(old);
+  store.succeed(old);
+  store.completeProbe(oldProbe, { extensionId: "outdated" });
+  assert.equal(store.getSnapshot().identity.extensionId, "one");
+  store.completeProbe(store.beginProbe(), { extensionId: "one", transport: "port" });
+  assert.equal(store.getSnapshot().phase, "error");
+  assert.equal(store.getSnapshot().error, "Channel closed");
+  const firstProbe = store.beginProbe();
+  const secondProbe = store.beginProbe();
+  store.completeProbe(secondProbe, null, "Extension removed");
+  store.completeProbe(firstProbe, { extensionId: "old" });
+  assert.equal(store.getSnapshot().extension, "missing");
+});
+
+test("health: a failure after success immediately removes green; quality/app failures retain KA evidence", () => {
+  for (const stage of ["extension", "ka", "app", "answer"]) {
+    const store = healthExports.createBridgeHealthStore();
+    let ticket = store.beginRequest();
+    store.selected(ticket, { extensionId: "one" });
+    store.kaResponded(ticket);
+    store.succeed(ticket);
+    const confirmed = store.getSnapshot().lastSuccessAt;
+    ticket = store.beginRequest();
+    store.selected(ticket, { extensionId: "one" });
+    if (stage === "app" || stage === "answer") store.kaResponded(ticket);
+    store.fail(ticket, stage, "Failed");
+    assert.equal(healthExports.bridgeHealthSummary(store.getSnapshot(), Date.now()).tone, "error");
+    assert.equal(store.getSnapshot().lastSuccessAt, confirmed, "historical success remains visibly historical");
+    assert.equal(store.getSnapshot().errorStage, stage);
+    assert.equal(store.getSnapshot().kaRespondedAt !== null, stage === "app" || stage === "answer");
+  }
+});
+
+test("health: cancellation, offline/reconnect and changed extension never restore an old green result", () => {
+  const store = healthExports.createBridgeHealthStore();
+  const succeed = () => {
+    const ticket = store.beginRequest();
+    store.selected(ticket, { extensionId: "one", transport: "port" });
+    store.kaResponded(ticket);
+    store.succeed(ticket);
+  };
+  succeed();
+  store.network(false);
+  store.network(true);
+  assert.equal(store.getSnapshot().phase, "error");
+  succeed();
+  store.completeProbe(store.beginProbe(), { extensionId: "two", transport: "port" });
+  assert.equal(store.getSnapshot().phase, "untested");
+  const ticket = store.beginRequest();
+  store.cancel(ticket);
+  store.kaResponded(ticket);
+  store.succeed(ticket);
+  assert.equal(store.getSnapshot().phase, "cancelled");
+  assert.notEqual(healthExports.bridgeHealthSummary(store.getSnapshot(), Date.now()).tone, "success");
+  const timeout = store.beginRequest();
+  store.cancel(timeout, { name: "TimeoutError", message: "Deadline exceeded" });
+  assert.equal(store.getSnapshot().phase, "error");
+  assert.match(store.getSnapshot().error, /Deadline/);
+});
+
+test("health: successful PING followed by a real transport failure stays failed after another PING", async () => {
+  const state = fixture(0);
+  const detection = state.exports.isExtensionBridgeAvailable();
+  await flush();
+  assert.equal(await detection, true);
+  assert.equal(state.health.getSnapshot().phase, "untested");
+  assert.equal(state.fetches.length, 0);
+  const answer = state.ask();
+  const rejected = assert.rejects(answer, /Could not reach/);
+  await flush();
+  state.fetches[0].reject(new Error("network unavailable"));
+  await rejected;
+  assert.equal(state.health.getSnapshot().phase, "error");
+  const ping = state.exports.isExtensionBridgeAvailable();
+  await flush();
+  assert.equal(await ping, true);
+  assert.equal(state.health.getSnapshot().phase, "error");
+  assert.equal(state.fetches.length, 1);
+  state.clean();
+});
+
+test("health: empty and HTML upstream replies fail instead of confirming KA", async () => {
+  for (const text of ["", "<!DOCTYPE html><html>Login required</html>"]) {
+    const state = fixture(0);
+    const answer = state.ask();
+    const rejected = assert.rejects(answer, /empty|HTML/);
+    await flush();
+    state.fetches[0].resolve({ text: async () => text });
+    await rejected;
+    assert.equal(state.health.getSnapshot().phase, "error");
+    assert.equal(state.health.getSnapshot().errorStage, text ? "ka" : "answer");
+    assert.equal(state.health.getSnapshot().kaRespondedAt !== null, !text);
+    await flush();
+    state.clean();
+  }
+});
+
+test("Bridge panel renders truthful local, detected, failed, expired and confirmed states", () => {
+  const React = require("react");
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const code = ts.transpileModule(read("src/components/BridgeStatus.tsx"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText;
+  const render = (required, patch) => {
+    const state = { ...healthExports.INITIAL_BRIDGE_HEALTH, ...patch };
+    const exports = {};
+    vm.runInNewContext(code, {
+      exports,
+      require: (name) => {
+        if (name === "react") return { useEffect: () => {}, useState: () => [required, () => {}] };
+        if (name === "@/lib/useBridgeHealth") return {
+          useBridgeHealth: () => ({ state, now: 100000, summary: healthExports.bridgeHealthSummary(state, 100000) }),
+        };
+        if (name === "@/lib/bridgeHealth") return healthExports;
+        if (name === "@/lib/extensionBridge") return {};
+        return require(name);
+      },
+    });
+    return renderToStaticMarkup(React.createElement(exports.default, { busy: false, testing: false, onTest: () => {}, onStop: () => {} }));
+  };
+  const local = render(false, {});
+  assert.match(local, /Direct connection \(localhost\)/);
+  assert.doesNotMatch(local, /<button|text-green-700/);
+  const ping = render(true, { extension: "detected" });
+  assert.match(ping, /Extension detected; KA unverified/);
+  assert.doesNotMatch(ping, /text-green-700/);
+  const failed = render(true, { phase: "error", errorStage: "answer", error: "No answer", kaRespondedAt: 90000 });
+  assert.match(failed, /not a bridge disconnection/);
+  assert.match(failed, /role="alert"/);
+  assert.doesNotMatch(failed, /text-green-700/);
+  assert.doesNotMatch(render(true, { phase: "ready", lastSuccessAt: 1 }), /text-green-700/);
+  assert.match(render(true, { phase: "ready", lastSuccessAt: 99999 }), /Last request successful/);
+});
 
 for (const [index, [name]] of bridges.entries()) {
   test(`${name}: port wins upgrade discovery and vendor competition; worker heartbeat survives throttled tab timers`, async () => {

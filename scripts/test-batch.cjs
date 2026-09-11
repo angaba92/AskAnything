@@ -16,6 +16,58 @@ const { readBatchAnswer } = require("../src/lib/batchResponse.ts");
 const opts = { question: "What is the SDK footprint?", mode: "loopio", confidenceReview: true };
 const normalize = (text, overrides = {}) => normalizeBridgedKaResponse(text, { ...opts, ...overrides });
 
+const openingRegressions = [
+  {
+    name: "SDK resources",
+    preamble: "The available resources cover SDK implementation, mobile platform support (Kotlin, Swift, React Native), and general performance considerations, but do not publish exact size or performance benchmarks.",
+    body: "Dynamic Yield provides native Mobile SDKs for Kotlin (Android), Swift (iOS), and React Native that streamline integration with the Experience API, eliminating the need for custom API implementations. The SDKs handle core functionality including pageview tracking, experience assignment, event tracking, and campaign preview capabilities. For web applications, Dynamic Yield delivers a JavaScript-based implementation via script tags that supports both traditional and single-page application (SPA) architectures.",
+    review: true,
+  },
+  {
+    name: "network research status",
+    preamble: "I now have comprehensive information about Dynamic Yield's network request patterns, batching, and optimization.",
+    body: "Mastercard Dynamic Yield (DY) minimizes network overhead through intelligent batching, caching, and selective request patterns that scale efficiently with personalization complexity. The platform sends a baseline set of requests on page load to fetch contextual data and user profiles, then batches subsequent engagement events (clicks, impressions, pageviews) into consolidated payloads every 100 milliseconds, reducing the total number of outbound calls.",
+    review: false,
+  },
+  {
+    name: "render-time research status",
+    preamble: "I found limited publicly available information on specific end-to-end render time metrics.",
+    body: "Dynamic Yield's SDK delivers personalized experiences with minimal latency through a multi-stage process: the SDK sends a decision request to Dynamic Yield servers, the decision engine evaluates audience and campaign conditions in real time, then the personalization decision is returned, and the variation is applied to the page.",
+    review: true,
+  },
+];
+
+for (const example of openingRegressions) {
+  for (const mode of ["simple", "detailed", "loopio", "custom"]) {
+    for (const separator of ["\n\n", " "]) {
+      test(`${example.name}: direct opening in ${mode}, separator=${JSON.stringify(separator)}`, () => {
+        const result = normalize(example.preamble + separator + example.body, { mode, customPrompt: "Keep the requested format." });
+        assert.equal(result.answer, example.body);
+        assert.equal(result.reviewRequired, example.review);
+        if (example.review) assert.ok(result.reviewReason.includes(example.preamble));
+      });
+    }
+  }
+}
+
+test("research-status detection tolerates adjectives without altering genuine vendor copy", () => {
+  for (const preamble of [
+    "I have sufficient relevant information about SDK performance.",
+    "Now I have detailed technical context for the response.",
+    "I've gathered comprehensive information about request batching.",
+    "I found very little publicly accessible information on latency.",
+  ]) {
+    const answer = "We use visitor information to select experiences. Resources are cached by the browser. The available API resources support SDK version 2.3.";
+    assert.equal(normalize(`${preamble}\n\n${answer}`).answer, answer);
+  }
+});
+
+test("research-only opening plus sources is not accepted as substantive", () => {
+  for (const { preamble } of openingRegressions) {
+    assert.equal(hasSubstantiveAnswer(normalize(`${preamble}\n\nSources: https://dy.dev/docs/web`).answer), false);
+  }
+});
+
 test("mixed prose preserves SDK facts, decimals, caveats and citations", () => {
   const raw = "Based on the available documentation, Dynamic Yield loads asynchronously. The SDK uses version 2.3 and requests https://dy.dev/docs/experience-api-basics. Exact bundle sizes are not documented.\n\nSources: https://support.dynamicyield.com/hc/en-us/articles/123\nCONFIDENCE_REVIEW: YES | Verify bundle size.";
   const result = normalize(raw);

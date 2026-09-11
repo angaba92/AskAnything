@@ -13,6 +13,22 @@ que el widget oficial no ofrece.
 - Tailwind CSS
 - Prisma + PostgreSQL (local o gestionado: Neon / Vercel Postgres)
 
+## Diagnóstico de KA en Batch
+
+La pestaña **Bridge**, disponible incluso sin cargar un Excel, distingue la
+detección de la extensión (PING) de una respuesta real de Knowledge Assistant y
+del procesamiento de la app. **Check KA + app** envía una sola consulta mínima;
+no hay consultas automáticas a KA. Las filas, Redo y el chat actualizan el mismo
+indicador de esta pestaña del navegador. Los errores de transporte, autenticación
+de la app y calidad de respuesta se muestran por separado.
+
+El verde confirma únicamente la última petición completada, caduca a los 60
+segundos y desaparece al iniciar otra petición o detectar un fallo. Otro PING
+correcto no borra un fallo de KA. Se muestran fecha, duración y versión/transporte
+de la extensión. En **localhost** se indica la ruta directa: el servidor local
+llama a KA y no utiliza ni prueba el bridge. En la versión alojada, la respuesta
+de la extensión pasa por `/api/ask` o `/api/chat` para su procesamiento.
+
 ## Puesta en marcha
 
 ```bash

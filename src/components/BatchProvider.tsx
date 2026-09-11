@@ -14,6 +14,7 @@ import { usePathname } from "next/navigation";
 import * as XLSX from "xlsx";
 import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
 import { BatchRequestError, readBatchAnswer } from "@/lib/batchResponse";
+import { bridgeHealth } from "@/lib/bridgeHealth";
 import {
   askKaViaExtension,
   isExtensionBridgeAvailable,
@@ -641,10 +642,12 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     redoActiveRef.current = rowIndex;
     const controller = new AbortController();
     abortRef.current = controller;
+    let bridgeTicket: number | undefined;
+    let bridgeReturned = false;
     const started = Date.now();
     const requestMode = modeRef.current;
     const requestPrompt = requestMode === "custom" ? customPromptRef.current : undefined;
-    const timeout = setTimeout(() => controller.abort(), 220000);
+    const timeout = setTimeout(() => controller.abort(new DOMException("Redo exceeded 220 seconds.", "TimeoutError")), 220000);
     setError(null);
     log("info", `Redo requested with extra source material.`, rowIndex + 1);
     try {
@@ -660,19 +663,16 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       );
       let bridged: string | undefined;
       if (useBridge) {
-        if (!(await isExtensionBridgeAvailable())) {
-          throw new Error(
-            "Corporate bridge not connected. Install/reload the AskAnything extension, connect to the VPN, and retry.",
-          );
-        }
         bridged = await askKaViaExtension(row.question, {
           mode: requestMode,
           context: enrichedContext,
           confidenceReview: true,
           signal: controller.signal,
           onBridgeSelected: logBridge,
+          onRequestStarted: (ticket) => { bridgeTicket = ticket; },
           customPrompt: requestPrompt,
         });
+        bridgeReturned = true;
       }
 
       const response = await fetch("/api/ask", {
@@ -690,7 +690,11 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         signal: controller.signal,
       });
       const data = await readBatchAnswer(response);
-      if (stopRef.current || controller.signal.aborted) return;
+      if (stopRef.current || controller.signal.aborted) {
+        if (bridgeTicket !== undefined) bridgeHealth.cancel(bridgeTicket, controller.signal.reason);
+        return;
+      }
+      if (bridgeTicket !== undefined) bridgeHealth.succeed(bridgeTicket);
 
       setRows((prev) => {
         const next = [...prev];
@@ -710,6 +714,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       });
       log("info", `Redo completed in ${((Date.now() - started) / 1000).toFixed(1)}s; answer and review updated.`, rowIndex + 1);
     } catch (err) {
+      if (bridgeTicket !== undefined) {
+        if (controller.signal.aborted || stopRef.current) bridgeHealth.cancel(bridgeTicket, controller.signal.reason);
+        else if (bridgeReturned) bridgeHealth.fail(bridgeTicket, err instanceof BatchRequestError && err.status === 422 ? "answer" : "app", (err as Error).message);
+      }
       if (controller.signal.aborted || stopRef.current) {
         log("info", "Redo cancelled; previous answer and review preserved.", rowIndex + 1);
         return;
@@ -781,7 +789,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
    * y mínima a KA, mostrando el error exacto en vez de dejar filas colgadas.
    */
   async function testBridge() {
-    if (busy()) {
+    if (busy() || ["discovering", "requesting", "processing"].includes(bridgeHealth.getSnapshot().phase)) {
       setError("Wait for the active request before testing the bridge.");
       return;
     }
@@ -789,8 +797,11 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     stopRef.current = false;
     const controller = new AbortController();
     abortRef.current = controller;
+    let bridgeTicket: number | undefined;
+    let bridgeReturned = false;
     setTestingBridge(true);
     setBridgeTest("Testing…");
+    const timeout = setTimeout(() => controller.abort(new DOMException("Bridge check exceeded 220 seconds.", "TimeoutError")), 220000);
     try {
       const host = window.location.hostname;
       if (["localhost", "127.0.0.1"].includes(host)) {
@@ -799,29 +810,42 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       }
 
       const started = Date.now();
-      const available = await isExtensionBridgeAvailable();
-      if (!available) {
-        setBridgeTest(
-          "PING failed: the extension is not loaded in this window. " +
-            "In incognito, open chrome://extensions and enable 'Allow in Incognito', then reload the extension and this tab.",
-        );
-        return;
-      }
-
+      const question = "Reply with the exact sentence: Connection check successful.";
+      const customPrompt = "Return only: Connection check successful.";
       const text = await askKaViaExtension(
-        "Reply with the single word OK.",
-        { mode: "custom", customPrompt: "Reply only with OK.", confidenceReview: false, signal: controller.signal, onBridgeSelected: logBridge },
+        question,
+        { mode: "custom", customPrompt, confidenceReview: false, signal: controller.signal, onBridgeSelected: logBridge, onRequestStarted: (ticket) => { bridgeTicket = ticket; } },
       );
+      bridgeReturned = true;
+      const response = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question, backend: "ka", mode: "custom", customPrompt, localKaResponse: text }),
+        signal: controller.signal,
+      });
+      const data = await readBatchAnswer(response);
+      if (!/^Connection check successful[.!]?$/i.test(data.answer.trim())) {
+        throw new BatchRequestError("KA replied, but the diagnostic answer was unexpected. The connection check is incomplete.", 422);
+      }
+      if (controller.signal.aborted) throw controller.signal.reason;
+      if (bridgeTicket !== undefined) bridgeHealth.succeed(bridgeTicket);
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       setBridgeTest(
-        `Bridge OK in ${seconds}s. Knowledge Assistant replied: ` +
+        `KA and app responded in ${seconds}s. This confirms this request, not future VPN availability. Reply: ` +
           `${text.replace(/\s+/g, " ").trim().slice(0, 120)}`,
       );
       log("info", `Bridge test OK in ${seconds}s.`);
     } catch (err) {
-      setBridgeTest(`Bridge failed: ${(err as Error).message}`);
-      log("error", `Bridge test failed: ${(err as Error).message}`);
+      if (bridgeTicket !== undefined) {
+        if (controller.signal.aborted) bridgeHealth.cancel(bridgeTicket, controller.signal.reason);
+        else if (bridgeReturned) bridgeHealth.fail(bridgeTicket, err instanceof BatchRequestError && err.status === 422 ? "answer" : "app", (err as Error).message);
+      }
+      const cancelled = controller.signal.aborted && controller.signal.reason?.name !== "TimeoutError";
+      const message = cancelled ? "Bridge check cancelled; connection not confirmed." : `Bridge test failed: ${(err as Error).message}`;
+      setBridgeTest(message);
+      log(cancelled ? "info" : "error", message);
     } finally {
+      clearTimeout(timeout);
       standaloneRef.current = false;
       abortRef.current = null;
       setStopping(false);
@@ -899,10 +923,11 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
       const controller = new AbortController();
       let generationReceived = false;
+      let bridgeTicket: number | undefined;
       const timeout = setTimeout(() => {
         setError("The request exceeded 220 seconds. Batch paused; resume manually.");
         stopRef.current = true;
-        controller.abort();
+        controller.abort(new DOMException("The request exceeded 220 seconds.", "TimeoutError"));
       }, 220000);
       try {
         const rowStarted = Date.now();
@@ -922,6 +947,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
             customPrompt: requestPrompt,
             signal: controller.signal,
             onBridgeSelected: logBridge,
+            onRequestStarted: (ticket) => { bridgeTicket = ticket; },
           });
           generationReceived = true;
           log(
@@ -961,6 +987,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           );
         }
         if (stopRef.current) {
+          if (bridgeTicket !== undefined) bridgeHealth.cancel(bridgeTicket, controller.signal.reason);
           setRows((prev) => {
             const next = [...prev];
             if (next[i].status === "running")
@@ -972,6 +999,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         // Cacheamos el hilo de esta sección y avanzamos la rotación para que la
         // siguiente pregunta caiga en otra sección/hilo distintos.
         rotation.current += 1;
+        if (bridgeTicket !== undefined) bridgeHealth.succeed(bridgeTicket);
         setRows((prev) => {
           const next = [...prev];
           next[i] = {
@@ -1001,6 +1029,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         );
         return "done";
       } catch (err) {
+        if (bridgeTicket !== undefined) {
+          if (controller.signal.aborted || stopRef.current) bridgeHealth.cancel(bridgeTicket, controller.signal.reason);
+          else if (generationReceived) bridgeHealth.fail(bridgeTicket, err instanceof BatchRequestError && err.status === 422 ? "answer" : "app", (err as Error).message);
+        }
         if ((err as Error).name === "AbortError" || stopRef.current) {
           setRows((prev) => {
             const next = [...prev];
