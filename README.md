@@ -61,6 +61,18 @@ entrega: la app muestra únicamente su contenido y retira los marcadores. Las
 respuestas antiguas sin marcadores siguen pasando por la limpieza de frases.
 El texto fuera de los límites no se presenta como parte de la respuesta.
 
+Al descargar un `.xlsx`, Batch modifica únicamente las celdas de respuesta y
+revisión dentro del paquete original. No reconstruye el libro: conserva hojas,
+estilos, anchos, comentarios, imágenes, relaciones, Custom XML y metadatos. Los
+formatos de entrada no basados en XLSX (`.xls`, `.csv`, `.ods`) se convierten a
+`.xlsx` y, por tanto, no ofrecen esa garantía de conservación exacta.
+
+La navegación Atrás/Adelante solicita una actualización del segmento activo de
+Next.js sin desmontar `BatchProvider`; las filas y una ejecución activa continúan
+en memoria. El indicador flotante se oculta si solo se ha cargado un archivo,
+muestra `Batch paused` cuando existe progreso incompleto y `Batch finished` solo
+cuando se ha recorrido el lote.
+
 ## Puesta en marcha
 
 ```bash

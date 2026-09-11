@@ -134,8 +134,9 @@ export default function BatchPage() {
   const [dragOver, setDragOver] = useState(false);
   const busy = running || redoingRow !== null || testingBridge;
   const reviewCount = rows.filter(
-    (row) => row.review.trim() && !row.reviewApproved,
+    (row) => row.status !== "error" && row.review.trim() && !row.reviewApproved,
   ).length;
+  const failedCount = rows.filter((row) => row.status === "error").length;
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -592,14 +593,14 @@ export default function BatchPage() {
           {reviewCount > 0 && (
             <>
               <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
-                {reviewCount} need review
+                {reviewCount} answered {reviewCount === 1 ? "row needs" : "rows need"} review
               </span>
               <button
                 type="button"
                 onClick={() => {
                   if (
                     window.confirm(
-                      "Clear every review flag in the current batch? This cannot be undone.",
+                      "Clear review notes from answered rows? Failed-row errors will be preserved. This cannot be undone.",
                     )
                   ) {
                     clearAllReviews();
@@ -608,9 +609,14 @@ export default function BatchPage() {
                 disabled={running}
                 className="rounded-lg border border-amber-300 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50"
               >
-                Clear all review flags
+                Clear answer review flags
               </button>
             </>
+          )}
+          {failedCount > 0 && (
+            <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-800">
+              {failedCount} failed {failedCount === 1 ? "row" : "rows"}
+            </span>
           )}
         </div>
 

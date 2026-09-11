@@ -96,7 +96,9 @@ function harness({ hostname = "demo.example", apiStatus = 200 } = {}) {
   ]), "Questions");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["Keep this sheet"]]), "Other");
   const file = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
-  file.name = "questionnaire.xlsx";
+  // Queue tests exercise the legacy conversion fallback; exact XLSX package
+  // preservation has its own ZIP-level regression suite.
+  file.name = "questionnaire.csv";
   render().loadFile(file);
   render().applyMapping();
   render();
@@ -183,6 +185,8 @@ test("quality failure advances without regenerating; Redo can repair failed rows
   assert.equal(h.render().rows[0].status, "error");
   assert.equal(h.render().rows[0].answer, "");
   assert.match(h.render().rows[0].review, /Latency unsupported/);
+  h.render().clearAllReviews();
+  assert.match(h.render().rows[0].review, /Latency unsupported/, "clearing answer reviews must preserve failed-row diagnostics");
   const redo = h.render().redoRow(0, "Additional evidence");
   await h.waitFor(() => h.queued.length === 1);
   h.queued.shift().resolve("A repaired first answer.");
@@ -257,6 +261,37 @@ test("localhost never pretends a skipped bridge test succeeded", async () => {
   assert.equal(h.requests.length, 0);
   assert.equal(h.health.getSnapshot().phase, "untested");
   assert.match(h.render().bridgeTest, /not used here/);
+});
+
+test("floating batch indicator distinguishes idle, running, paused and finished", () => {
+  const h = harness();
+  const label = h.render;
+  const moduleExports = (() => {
+    const exports = {};
+    const filename = path.resolve("src/components/BatchProvider.tsx");
+    const compiled = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+    }).outputText;
+    const localRequire = (name) => {
+      if (name === "react") return {
+        createContext: () => ({ Provider: "provider" }), useContext: () => null,
+        useCallback: (callback) => callback, useRef: (value) => ({ current: value }),
+        useState: (value) => [value, () => {}],
+      };
+      if (name === "react/jsx-runtime") return { jsx: () => null, jsxs: () => null };
+      if (name === "next/navigation") return { usePathname: () => "/" };
+      if (name === "next/link") return () => null;
+      if (name.startsWith("@/")) return {};
+      return require(name);
+    };
+    vm.runInNewContext(compiled, { exports, require: localRequire });
+    return exports;
+  })();
+  assert.equal(moduleExports.batchIndicatorLabel(1, false, 0, 0), null);
+  assert.equal(moduleExports.batchIndicatorLabel(3, true, 1, 1), "Batch running");
+  assert.equal(moduleExports.batchIndicatorLabel(3, false, 1, 1), "Batch paused");
+  assert.equal(moduleExports.batchIndicatorLabel(3, false, 3, 2), "Batch finished");
+  assert.ok(label, "keep the main provider harness initialized");
 });
 
 test("empty raw KA answer advances as a quality failure instead of generating again", async () => {

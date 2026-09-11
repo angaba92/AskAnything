@@ -3,6 +3,7 @@ import "./globals.css";
 import BatchProvider from "@/components/BatchProvider";
 import ThemeToggle from "@/components/ThemeToggle";
 import LogoutButton from "@/components/LogoutButton";
+import NavigationRecovery from "@/components/NavigationRecovery";
 
 export const metadata: Metadata = {
   title: "AskAnything — DY Agents Client",
@@ -25,6 +26,7 @@ export default function RootLayout({
       </head>
       <body>
         <BatchProvider>{children}</BatchProvider>
+        <NavigationRecovery />
         <LogoutButton />
         <ThemeToggle />
       </body>

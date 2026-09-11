@@ -238,6 +238,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const contextRef = useRef("");
   const modeRef = useRef<BatchMode>("detailed");
   const workbookRef = useRef<XLSX.WorkBook | null>(null);
+  const originalWorkbookBytesRef = useRef<ArrayBuffer | null>(null);
   const rawRef = useRef<SpreadsheetRawRow[]>([]);
   const answerColRef = useRef("");
   const reviewColRef = useRef("");
@@ -443,6 +444,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       return;
     }
     workbookRef.current = wb;
+    originalWorkbookBytesRef.current = buffer.slice(0);
     setSheetNames(wb.SheetNames);
     setFileName(name);
     setRows([]);
@@ -594,7 +596,11 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
   function clearAllReviews() {
     setRows((prev) =>
-      prev.map((row) => ({ ...row, review: "", reviewApproved: false })),
+      prev.map((row) =>
+        row.status === "error"
+          ? row
+          : { ...row, review: "", reviewApproved: false },
+      ),
     );
   }
 
@@ -1203,7 +1209,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     ).length;
     if (remainingErrors > 0 && !stopRef.current) {
       setError(
-        `${remainingErrors} row(s) need attention. Use Redo with notes, or press Start to retry incomplete rows.`,
+        `${remainingErrors} ${remainingErrors === 1 ? "row failed or is incomplete" : "rows failed or are incomplete"}. These are separate from answered rows with review notes. Use Redo with notes, or press Start to retry failed rows.`,
       );
     } else if (!stopRef.current) {
       setError(null);
@@ -1238,7 +1244,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     log("info", "Stop requested; queued Redos cancelled.");
   }
 
-  function download() {
+  async function download() {
     const wb = workbookRef.current;
     const sheetName = selectedSheetRef.current;
     const ws = wb?.Sheets[sheetName];
@@ -1262,6 +1268,62 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     if (answerIndex === undefined || reviewIndex === undefined) {
       setError("The mapped output columns are invalid. Reopen column mapping.");
       return;
+    }
+
+    const answerHeader = newAnswerColumnName.trim() || DEFAULT_ANSWER_COLUMN;
+    const reviewHeader = newReviewColumnName.trim() || DEFAULT_REVIEW_COLUMN;
+    const edits = [
+      ...(!answerColRef.current
+        ? [{ row: headerRowRef.current - 1, column: answerIndex, value: answerHeader }]
+        : []),
+      ...(!reviewColRef.current
+        ? [{ row: headerRowRef.current - 1, column: reviewIndex, value: reviewHeader }]
+        : []),
+      ...rowsRef.current.flatMap((row) => {
+        const exportedReview = row.reviewApproved
+          ? row.review.trim()
+            ? `Approved — ${row.review.trim()}`
+            : "Approved"
+          : row.review;
+        return [
+          { row: row.sourceRow, column: answerIndex, value: row.answer },
+          { row: row.sourceRow, column: reviewIndex, value: exportedReview },
+        ];
+      }),
+    ];
+    const outputName = fileName.replace(/\.(xlsx|xls|csv|ods)$/i, "") + "_answered.xlsx";
+
+    if (/\.xlsx$/i.test(fileName) && originalWorkbookBytesRef.current) {
+      try {
+        // Patch only the selected worksheet XML inside the original package.
+        // This retains drawings, comments, styles, metadata and unsupported
+        // workbook features that a SheetJS read/write roundtrip would discard.
+        const { updateOriginalXlsx } = await import("@/lib/xlsxPreserve");
+        const bytes = await updateOriginalXlsx(
+          originalWorkbookBytesRef.current,
+          sheetName,
+          edits,
+          [
+            ...(!answerColRef.current ? [{ column: answerIndex, width: 80 }] : []),
+            ...(!reviewColRef.current ? [{ column: reviewIndex, width: 45 }] : []),
+          ],
+        );
+        const safeBuffer = new Uint8Array(bytes.byteLength);
+        safeBuffer.set(bytes);
+        const url = URL.createObjectURL(new Blob([safeBuffer.buffer], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = outputName;
+        link.click();
+        URL.revokeObjectURL(url);
+        setError(null);
+        return;
+      } catch (err) {
+        setError(`Could not preserve the original XLSX formatting: ${(err as Error).message}`);
+        return;
+      }
     }
 
     if (!answerColRef.current) {
@@ -1289,13 +1351,9 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       });
     }
 
-    const widths = ws["!cols"] ?? [];
-    widths[answerIndex] = { ...(widths[answerIndex] ?? {}), wch: 80 };
-    widths[reviewIndex] = { ...(widths[reviewIndex] ?? {}), wch: 45 };
-    ws["!cols"] = widths;
-
-    // El export siempre es .xlsx; quitamos cualquier extensión soportada de origen.
-    XLSX.writeFile(wb, fileName.replace(/\.(xlsx|xls|csv|ods)$/i, "") + "_answered.xlsx");
+    // Non-XLSX imports must be converted. Existing XLSX files use the
+    // package-preserving branch above instead of a lossy workbook rewrite.
+    XLSX.writeFile(wb, outputName);
   }
 
   const doneCount = rows.filter(
@@ -1377,8 +1435,8 @@ function BatchFloatingIndicator() {
   const pathname = usePathname();
 
   if (pathname === "/batch") return null;
-  if (rows.length === 0) return null;
-  if (!running && progress >= rows.length && doneCount === 0) return null;
+  const label = batchIndicatorLabel(rows.length, running, progress, doneCount);
+  if (!label) return null;
 
   return (
     <Link
@@ -1391,11 +1449,22 @@ function BatchFloatingIndicator() {
         <span className="h-2.5 w-2.5 rounded-full bg-green-500" />
       )}
       <span className="font-medium text-brand-dark">
-        Batch {running ? "running" : "finished"}
+        {label}
       </span>
       <span className="text-gray-500">
         {progress}/{rows.length}
       </span>
     </Link>
   );
+}
+
+export function batchIndicatorLabel(
+  total: number,
+  running: boolean,
+  progress: number,
+  doneCount: number,
+): string | null {
+  if (total === 0 || !running && progress === 0 && doneCount === 0) return null;
+  if (running) return "Batch running";
+  return progress >= total ? "Batch finished" : "Batch paused";
 }
