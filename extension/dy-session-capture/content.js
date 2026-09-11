@@ -6,24 +6,31 @@ const ALLOWED_ORIGINS = new Set([
   "http://127.0.0.1:3000",
 ]);
 const activeKaRequests = new Map();
+const bridgeExtensionId = chrome.runtime.id;
+const bridgeVersion = chrome.runtime.getManifest().version;
 
-function controlKaRequest(type, requestId) {
-  try {
-    chrome.runtime.sendMessage({ type, requestId }, () => {
-      void chrome.runtime.lastError;
-    });
-  } catch {
-    // A reloaded extension invalidates this content script.
-  }
-}
-
-function finishKaRequest(requestId, cancel = false) {
+function finishKaRequest(requestId, disconnect = true) {
   const active = activeKaRequests.get(requestId);
   if (!active) return;
-  clearInterval(active.heartbeat);
   clearTimeout(active.timeout);
   activeKaRequests.delete(requestId);
-  if (cancel) controlKaRequest("PROXY_KA_CANCEL", requestId);
+  active.port.onMessage.removeListener(active.onMessage);
+  active.port.onDisconnect.removeListener(active.onDisconnect);
+  if (disconnect) {
+    try {
+      active.port.disconnect();
+    } catch (error) {
+      console.warn("Could not disconnect the KA port; the worker deadline remains in force.", error);
+      try {
+        chrome.runtime.sendMessage({ type: "PROXY_KA_CANCEL", requestId }, () => {
+          const failure = chrome.runtime.lastError;
+          if (failure) console.warn("KA cancellation fallback failed.", failure.message);
+        });
+      } catch (failure) {
+        console.warn("KA cancellation fallback could not reach the worker.", failure);
+      }
+    }
+  }
 }
 
 function reply(requestId, payload) {
@@ -31,8 +38,10 @@ function reply(requestId, payload) {
     {
       source: EXTENSION_SOURCE,
       requestId,
-      extensionId: chrome.runtime.id,
+      extensionId: bridgeExtensionId,
       protocolVersion: 2,
+      transport: "port",
+      extensionVersion: bridgeVersion,
       ...payload,
     },
     window.location.origin,
@@ -51,73 +60,74 @@ window.addEventListener("message", (event) => {
 
   const { requestId, type } = event.data;
   if (typeof requestId !== "string") return;
-  if (event.data.extensionId && event.data.extensionId !== chrome.runtime.id) return;
+  if (event.data.extensionId && event.data.extensionId !== bridgeExtensionId) return;
   if (type === "KA_CANCEL_V2") {
-    finishKaRequest(requestId, true);
+    finishKaRequest(requestId);
     return;
   }
 
   if (type === "PING") {
-    // El PING debe demostrar que el service worker responde, no solo que el
-    // content script está inyectado: en incógnito puede fallar justo ahí.
-    chrome.runtime.sendMessage({ type: "PROXY_PING" }, (response) => {
-      if (chrome.runtime.lastError) {
-        reply(requestId, {
+    try {
+      chrome.runtime.sendMessage({ type: "PROXY_PING" }, (response) => {
+        const error = chrome.runtime.lastError;
+        reply(requestId, response?.ok && !error ? { ok: true } : {
           ok: false,
-          error: chrome.runtime.lastError.message,
+          error: error?.message || "The bridge background worker did not respond.",
         });
-        return;
-      }
-      reply(requestId, response?.ok ? { ok: true } : {
-        ok: false,
-        error: "The bridge background worker did not respond.",
       });
-    });
+    } catch (error) {
+      reply(requestId, { ok: false, error: `${error.message} Reload the extension and this tab.` });
+    }
     return;
   }
 
   if (type !== "KA_REQUEST" && type !== "KA_REQUEST_V2") return;
-  if (type === "KA_REQUEST_V2" && event.data.extensionId !== chrome.runtime.id) return;
+  if (type === "KA_REQUEST_V2" && event.data.extensionId !== bridgeExtensionId) return;
   if (activeKaRequests.has(requestId)) return;
 
-  activeKaRequests.set(requestId, {
-    // Scoped runtime traffic mitigates MV3 idle shutdown; it never resubmits KA.
-    heartbeat: setInterval(() => controlKaRequest("PROXY_KA_HEARTBEAT", requestId), 20000),
-    timeout: setTimeout(() => {
-      finishKaRequest(requestId, true);
-      reply(requestId, { ok: false, error: "Knowledge Assistant bridge timed out." });
-    }, 190000),
-  });
   try {
-    chrome.runtime.sendMessage(
-    {
-      type: "PROXY_KA_REQUEST",
-      requestId,
-      messages: event.data.messages,
-    },
-    (response) => {
-      const error = chrome.runtime.lastError;
+    const port = chrome.runtime.connect({ name: "askanything-ka" });
+    const onDisconnect = () => {
+      const reason = chrome.runtime.lastError?.message;
       if (!activeKaRequests.has(requestId)) return;
-      finishKaRequest(requestId, !!error || !response?.ok || typeof response.text !== "string");
-      if (error) {
-        reply(requestId, {
-          ok: false,
-          error: error.message,
-        });
+      finishKaRequest(requestId, false);
+      reply(requestId, {
+        ok: false,
+        error: `Corporate bridge disconnected before KA completed${reason ? `: ${reason}` : "."} No request was retried. Reload the extension and this tab before resuming.`,
+      });
+    };
+    const onMessage = (response) => {
+      if (!activeKaRequests.has(requestId) || response?.requestId !== requestId) return;
+      if (response?.type === "HEARTBEAT") {
+        // One reply per worker heartbeat; no timer in the backgrounded page.
+        try {
+          port.postMessage({ type: "HEARTBEAT_ACK", requestId });
+        } catch (error) {
+          finishKaRequest(requestId);
+          reply(requestId, { ok: false, error: `Corporate bridge heartbeat failed: ${error.message}. No request was retried. Reload the extension and this tab.` });
+        }
         return;
       }
-      reply(requestId, response || {
-        ok: false,
-        error: "The bridge did not return a response.",
-      });
-    },
-  );
+      if (response?.type !== "RESULT") return;
+      finishKaRequest(requestId);
+      reply(requestId, response);
+    };
+    activeKaRequests.set(requestId, {
+      port, onMessage, onDisconnect,
+      timeout: setTimeout(() => {
+        finishKaRequest(requestId);
+        reply(requestId, { ok: false, error: "Knowledge Assistant bridge timed out. No request was retried." });
+      }, 190000),
+    });
+    port.onDisconnect.addListener(onDisconnect);
+    port.onMessage.addListener(onMessage);
+    port.postMessage({ type: "START", requestId, messages: event.data.messages });
   } catch (error) {
-    finishKaRequest(requestId, true);
-    reply(requestId, { ok: false, error: error.message });
+    finishKaRequest(requestId);
+    reply(requestId, { ok: false, error: `${error.message} Reload the extension and this tab.` });
   }
 });
 
 window.addEventListener("pagehide", () => {
-  for (const requestId of activeKaRequests.keys()) finishKaRequest(requestId, true);
+  for (const requestId of activeKaRequests.keys()) finishKaRequest(requestId);
 });

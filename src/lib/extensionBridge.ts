@@ -13,7 +13,11 @@ interface BridgeResponse {
   error?: string;
   extensionId?: string;
   protocolVersion?: number;
+  transport?: string;
+  extensionVersion?: string;
 }
+
+export type BridgeConnection = Pick<BridgeResponse, "extensionId" | "extensionVersion" | "transport">;
 
 async function requestBridge(
   type: "PING" | "KA_REQUEST" | "KA_REQUEST_V2",
@@ -23,6 +27,7 @@ async function requestBridge(
 ): Promise<BridgeResponse> {
   const requestId = crypto.randomUUID();
   let timer: number | undefined;
+  let discoveryTimer: number | undefined;
   let onMessage: ((event: MessageEvent<BridgeResponse>) => void) | undefined;
   let onAbort: (() => void) | undefined;
   let sent = false;
@@ -51,8 +56,11 @@ async function requestBridge(
         if (type === "PING") {
           if (!event.data.ok) return;
           // Prefer a targetable bridge, but retain compatibility until old extensions reload.
-          if (event.data.protocolVersion !== 2 || !event.data.extensionId) {
-            legacyResponse = event.data;
+          if (event.data.transport !== "port") {
+            if (!legacyResponse || event.data.extensionId) legacyResponse = event.data;
+            if (discoveryTimer === undefined) {
+              discoveryTimer = window.setTimeout(() => resolve(legacyResponse!), 300);
+            }
             return;
           }
         } else if (!event.data.ok || typeof event.data.text !== "string") {
@@ -80,6 +88,7 @@ async function requestBridge(
     throw error;
   } finally {
     if (timer !== undefined) window.clearTimeout(timer);
+    if (discoveryTimer !== undefined) window.clearTimeout(discoveryTimer);
     if (onMessage) window.removeEventListener("message", onMessage);
     if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
@@ -103,12 +112,14 @@ export async function askKaViaExtension(
     confidenceReview?: boolean;
     customPrompt?: string;
     signal?: AbortSignal;
+    onBridgeSelected?: (connection: BridgeConnection) => void;
   },
 ): Promise<string> {
   const content = buildKaUserContent(question, opts);
   const payload = { messages: [{ role: "user", content }] };
 
   const bridge = await requestBridge("PING", {}, 5000, opts.signal);
+  opts.onBridgeSelected?.(bridge);
   const targeted = bridge.protocolVersion === 2 && !!bridge.extensionId;
   // A distinct request type prevents older, untargetable extensions from also fetching KA.
   const response = await requestBridge(

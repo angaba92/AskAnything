@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "dy-demo",
   "description": "Run Dynamic Yield on sites locally, with an AskAnything corporate bridge.",
-  "version": "2.5.3",
+  "version": "2.5.4",
+  "minimum_chrome_version": "114",
   "icons": {
     "16": "/images/logo-16.png",
     "48": "/images/logo-48.png",

@@ -186,19 +186,72 @@ export function stripNonClientFacingPreamble(text: string): string {
  * enteros, que borraba respuestas válidas por una sola frase.
  */
 export function stripNonClientFacingSentences(text: string): string {
-  const withoutPreamble = stripNonClientFacingPreamble(text);
-  return withoutPreamble.split("\n").map((line) =>
-    line.split(/(?<=[.!?])\s+(?=[A-Z])/)
-      .filter((part) => {
-        const value = part.replace(/^\s*[•*-]\s*/, "").trim();
-        // A mixed factual sentence is retained for review, never deleted just
-        // because it contains a caveat or an actual unsupported capability.
-        const researchSentence = /^(?:(?:i|we)\b|(?:the\s+)?(?:public|published|available|accessible|internal|product|technical)\s+(?:documentation|sources?|knowledge|information)|(?:the\s+)?(?:documentation|search results?|guru)\b|contact\b|based on\b|the only\b.*\breference\b)/i.test(value);
-        return !isClarificationRequest(value) &&
-          !(researchSentence && hasNonClientFacingLanguage(value));
-      })
-      .join(" "),
-  ).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return separateClientFacingResponse(text).answer;
+}
+
+const DOCUMENTATION_GAP =
+  /\bnot\s+(?:(?:publicly|explicitly|fully|comprehensively|currently)\s+)?(?:documented|described|disclosed|published|detailed|quantified|specified|verified|confirmed|substantiated)\b|\b(?:documentation|sources?|information)\b[^.!?\n]*\b(?:does not|do not|cannot|can't|lack|lacks|missing|unavailable)\b|\b(?:metrics?|figures?|benchmarks?|specifications?)\b[^.!?\n]*\bnot available\b/i;
+const SOURCE_COMMENTARY =
+  /^(?:however[, ]+)?(?:the\s+)?(?:(?:available|public|published|accessible|provided|developer|technical|internal|product)\s+)*(?:documentation|sources?|search results?|knowledge base)\s+(?:covers?|describes?|mentions?|references?|includes?|contains?|provides?|details?|does|do|is|are|lacks?)\b/i;
+const INTERNAL_REFERRAL =
+  /\b(?:contact|consult|reach out to|work(?:ing)? with|speak (?:to|with))\b[^.!?\n]*\b(?:account (?:representative|team|manager)|technical (?:support|consultation)|(?:sales|support|legal|implementation|product) team)\b|\b(?:account representative|sales team|support team|technical consultation)\b[^.!?\n]*\b(?:provide|available|confirm|details|specifications)\b/i;
+
+function editorialSentence(text: string): boolean {
+  const value = text.replace(/^[\s•*#_`+-]+/, "").trim();
+  return DOCUMENTATION_GAP.test(value) || SOURCE_COMMENTARY.test(value) ||
+    INTERNAL_REFERRAL.test(value) || isClarificationRequest(value) ||
+    (/^(?:i|we|based on|the only)\b/i.test(value) && hasNonClientFacingLanguage(value));
+}
+
+/**
+ * Separate internal research from client copy. A research-led list belongs to
+ * its introduction; a caveat elsewhere must not consume the adjacent facts.
+ */
+export function separateClientFacingResponse(text: string): SeparatedReviewLimitations {
+  const limitations: string[] = [];
+  const kept: string[] = [];
+  let researchList = false;
+  const bullet = /^\s*(?:[•*+-]|\d+[.)])\s+/;
+  for (const raw of (text ?? "").split(/\r?\n/)) {
+    if (!raw.trim()) {
+      kept.push("");
+      continue;
+    }
+    if (researchList && bullet.test(raw)) {
+      limitations.push(raw.trim());
+      continue;
+    }
+    researchList = false;
+    const parts = raw.split(/(?<=[.!?])\s+(?=[A-Z*_])/);
+    const answerParts: string[] = [];
+    for (const part of parts) {
+      const value = stripNonClientFacingPreamble(part).replace(
+        /^(\s*(?:[•*+-]\s+)?)(?:the\s+)?(?:(?:available|public|published|developer|technical|product)\s+)*documentation (?:states|confirms|notes|indicates|explains) that\s+/i,
+        "$1",
+      );
+      if (!value.trim() || /^[\s•*#_`+-]+$/.test(value)) continue;
+      const transition = value.search(/[,;]\s*(?:however|but|while|although|yet|nevertheless|with)\b/i);
+      if (transition > 0 && editorialSentence(value.slice(transition + 1))) {
+        const fact = value.slice(0, transition).trim();
+        if (!editorialSentence(fact)) {
+          answerParts.push(/[.!?]$/.test(fact) ? fact : `${fact}.`);
+          limitations.push(value.slice(transition + 1).trim());
+          continue;
+        }
+      }
+      if (editorialSentence(value)) {
+        limitations.push(part.trim());
+        if (/:["*_`\s]*$/.test(value)) researchList = true;
+      } else {
+        answerParts.push(value);
+      }
+    }
+    if (answerParts.length) kept.push(answerParts.join(" "));
+  }
+  return {
+    answer: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(),
+    limitations: [...new Set(limitations)],
+  };
 }
 
 /**

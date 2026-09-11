@@ -420,10 +420,10 @@ export default function BatchPage() {
                   Custom system instructions
                 </p>
                 <p className="text-xs text-gray-500">
-                  The uploaded Markdown replaces all built-in style instructions and
-                  response guardrails for this mode. Maximum{" "}
-                  {MAX_CUSTOM_PROMPT_CHARS.toLocaleString()} characters. Custom adds
-                  no hidden guardrails or confidence metadata.
+                  The uploaded Markdown replaces built-in style instructions.
+                  Research commentary and contact-team referrals are kept out of
+                  client-facing answers in every mode. Maximum{" "}
+                  {MAX_CUSTOM_PROMPT_CHARS.toLocaleString()} characters.
                 </p>
               </div>
               <div className="flex items-center gap-2">

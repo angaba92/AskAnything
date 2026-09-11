@@ -22,9 +22,47 @@ test("mixed prose preserves SDK facts, decimals, caveats and citations", () => {
   assert.match(result.answer, /loads asynchronously/);
   assert.match(result.answer, /version 2\.3/);
   assert.match(result.answer, /https:\/\/dy\.dev\/docs\/experience-api-basics/);
-  assert.match(result.answer, /bundle sizes are not documented/);
+  assert.doesNotMatch(result.answer, /bundle sizes are not documented/);
   assert.doesNotMatch(result.answer, /Based on|CONFIDENCE_REVIEW/);
   assert.match(result.reviewReason, /Verify bundle size/);
+  assert.match(result.reviewReason, /bundle sizes are not documented/);
+});
+
+const sdkRegression = `The available documentation covers SDK implementation guides for mobile platforms (Kotlin, React Native) and web script integration, but does not include quantified performance metrics such as:
+• Typical production SDK size (in kilobytes or megabytes)
+• Required dependencies and their sizes
+• Initialization overhead or time-to-interactive measurements
+• Specific optimization techniques or feature flags to reduce footprint
+
+Dynamic Yield provides SDKs for web and mobile applications designed to integrate personalization and data collection capabilities. However, specific production SDK size metrics, initialization overhead measurements, and documented footprint-reduction options are not detailed in the publicly available developer documentation.
+
+For detailed technical specifications regarding SDK performance characteristics, bundle sizes, and optimization strategies, please contact your Dynamic Yield account representative or technical support team, as this information may be available through direct technical consultation or in implementation guides tailored to your specific platform and use case.`;
+
+for (const mode of ["simple", "detailed", "loopio", "custom"]) {
+  test(`exact reported SDK answer is client-facing in ${mode}`, () => {
+    const result = normalize(sdkRegression, { mode, customPrompt: "Write three paragraphs and an example." });
+    assert.equal(result.answer, "Dynamic Yield provides SDKs for web and mobile applications designed to integrate personalization and data collection capabilities.");
+    assert.doesNotMatch(result.answer, /documentation|contact|quantified|Typical production|Required dependencies|Initialization overhead|Specific optimization/i);
+    assert.equal(result.reviewRequired, true);
+    for (const detail of ["Typical production SDK size", "Required dependencies", "Initialization overhead", "Specific optimization techniques", "not detailed", "please contact"]) {
+      assert.ok(result.reviewReason.includes(detail), detail);
+    }
+  });
+}
+
+test("a research-led list across a blank line does not leak orphaned bullets", () => {
+  const result = normalize("The available documentation does not include these figures:\n\n- SDK size\n- Memory footprint\n\nMastercard Dynamic Yield supports personalization.\n\n- API calls can be batched.\n- Payloads can be reduced.");
+  assert.doesNotMatch(result.answer, /SDK size|Memory footprint/);
+  assert.match(result.answer, /API calls can be batched/);
+  assert.match(result.answer, /Payloads can be reduced/);
+});
+
+test("only a documentation caveat is moved from a mixed sentence", () => {
+  const result = normalize("Dynamic Yield supports SDK version 2.3 and asynchronous loading; however, exact bundle sizes are not documented.\n\nA UK-only database is not supported, but UK traffic can be served from Germany.");
+  assert.match(result.answer, /SDK version 2\.3 and asynchronous loading\./);
+  assert.match(result.answer, /UK-only database is not supported, but UK traffic can be served from Germany/);
+  assert.doesNotMatch(result.answer, /not documented/);
+  assert.match(result.reviewReason, /exact bundle sizes/);
 });
 
 test("one caveat cannot delete a bullet list or turn a real negative into Yes", () => {

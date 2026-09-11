@@ -17,6 +17,7 @@ import { BatchRequestError, readBatchAnswer } from "@/lib/batchResponse";
 import {
   askKaViaExtension,
   isExtensionBridgeAvailable,
+  type BridgeConnection,
 } from "@/lib/extensionBridge";
 
 export interface BatchRow {
@@ -201,6 +202,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
   function clearLogs() {
     setLogs([]);
+  }
+
+  function logBridge(connection: BridgeConnection) {
+    log("info", `Bridge selected: ${connection.extensionId || "legacy"} · version=${connection.extensionVersion || "unknown"} · transport=${connection.transport || "callback (update extension)"}`);
   }
   const redoQueue = useRef<Array<{ index: number; guidance: string }>>([]);
   const runningRef = useRef(false);
@@ -665,6 +670,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
           context: enrichedContext,
           confidenceReview: true,
           signal: controller.signal,
+          onBridgeSelected: logBridge,
           customPrompt: requestPrompt,
         });
       }
@@ -804,7 +810,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
 
       const text = await askKaViaExtension(
         "Reply with the single word OK.",
-        { mode: "custom", customPrompt: "Reply only with OK.", confidenceReview: false, signal: controller.signal },
+        { mode: "custom", customPrompt: "Reply only with OK.", confidenceReview: false, signal: controller.signal, onBridgeSelected: logBridge },
       );
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       setBridgeTest(
@@ -915,6 +921,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
             confidenceReview: true,
             customPrompt: requestPrompt,
             signal: controller.signal,
+            onBridgeSelected: logBridge,
           });
           generationReceived = true;
           log(
@@ -1024,7 +1031,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         // duplicate generation while the original may still be running.
         if (generationReceived ||
             err instanceof BatchRequestError && err.status >= 400 && err.status < 500 && err.status !== 429 ||
-            /channel closed|message channel|timed out|timeout|authentication|bridge.*not connected|extension context|runtime|background worker|without JSON/i.test((err as Error).message)) {
+            /channel closed|message channel|timed out|timeout|authentication|bridge.*(?:not connected|disconnected|failed)|extension context|runtime|background worker|without JSON/i.test((err as Error).message)) {
           setError(`${(err as Error).message} Batch paused; completed rows are preserved.`);
           stopRef.current = true;
           return "stopped";

@@ -36,6 +36,12 @@ then reload the AskAnything tab. For incognito, enable **Allow in Incognito**.
 The connected indicator checks extension messaging, not VPN access; **Test
 bridge** in Batch sends a real request to Knowledge Assistant.
 
+The dedicated-port update is **Corporate bridge 1.2.0** or **dy-demo 2.5.4**.
+Batch Logs report the selected extension ID, version, and `transport=port`.
+KA uses its own runtime port so the dy-demo plugin's general message listener
+cannot answer or close its asynchronous response channel. Heartbeats run in the
+worker, not in a potentially throttled background tab.
+
 The updated bridge waits up to 180 seconds for KA (190 seconds in the page),
 does not automatically resend a timed-out generation, and forwards Stop to the
 active request. If Chrome has invalidated the extension runtime, cancellation

@@ -24,7 +24,7 @@ import {
   stripNonClientFacingSentences,
 } from "../promptMapping";
 import { resolveMode, plainifyAnswer, enforceBullets } from "../promptTemplate";
-import { hasSubstantiveAnswer } from "../responsePolicy";
+import { hasSubstantiveAnswer, separateClientFacingResponse } from "../responsePolicy";
 import type { GenerateOpts, ProviderAnswer } from "./types";
 
 export function normalizeBridgedKaResponse(
@@ -37,21 +37,15 @@ export function normalizeBridgedKaResponse(
     (source) => !isInternalSourceUrl(source.uri ?? ""),
   );
   const confidence = extractConfidenceReview(rawText);
-  const note = isCustomMode
-    ? { text: confidence.text, note: "" }
-    : extractConfidenceNote(confidence.text);
+  const note = extractConfidenceNote(confidence.text);
   const sourceHeading = note.text.search(/^\s*(?:#{1,6}\s*|\*\*)?(?:sources?|references?)\s*(?:\*\*)?\s*:?\s*$/im);
   const body = !isCustomMode && sourceHeading >= 0
     ? note.text.slice(0, sourceHeading)
     : note.text;
-  const separated = isCustomMode
-    ? { answer: body, limitations: [] }
-    : separateReviewLimitations(plainifyAnswer(body));
-  let answer = isCustomMode ? body.trim() : stripInternalSourceLinks(
-    stripNonClientFacingSentences(plainifyAnswer(body)),
-  );
+  const separated = separateClientFacingResponse(isCustomMode ? body : plainifyAnswer(body));
+  let answer = stripInternalSourceLinks(separated.answer);
   const normalizedConfidence =
-    opts.confidenceReview && !isCustomMode
+    opts.confidenceReview
       ? extractConfidenceReview(answer)
       : { text: answer, required: false, reason: "", found: false };
   answer = normalizedConfidence.text;
@@ -79,6 +73,7 @@ export function normalizeBridgedKaResponse(
     normalizedConfidence.reason,
     noteNeedsReview ? note.note : "",
     ...separated.limitations,
+    ...separateReviewLimitations(separated.answer).limitations,
     isClarificationRequest(body) ? "The response asks for clarification; review the interpretation." : "",
   ].filter(Boolean))];
 

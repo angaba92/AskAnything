@@ -85,7 +85,7 @@ function kaRequestKey(requestId, sender) {
   return JSON.stringify([sender.tab?.id, sender.frameId, sender.documentId, requestId]);
 }
 
-async function proxyKaRequest(messages, sender, requestId) {
+async function proxyKaRequest(messages, sender, requestId, requestController) {
   if (!APP_ORIGINS.has(senderOrigin(sender))) {
     return { ok: false, error: "Request rejected: untrusted app origin." };
   }
@@ -95,7 +95,7 @@ async function proxyKaRequest(messages, sender, requestId) {
 
   const key = typeof requestId === "string" ? kaRequestKey(requestId, sender) : null;
   if (key && kaControllers.has(key)) return { ok: false, error: "Request already active." };
-  const controller = new AbortController();
+  const controller = requestController || new AbortController();
   if (key) kaControllers.set(key, controller);
   let timedOut = false;
   const timeout = setTimeout(() => {
@@ -136,6 +136,85 @@ async function proxyKaRequest(messages, sender, requestId) {
   }
 }
 
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "askanything-ka") return;
+  const sender = port.sender;
+  if (!sender || !APP_ORIGINS.has(senderOrigin(sender))) {
+    try {
+      port.disconnect();
+    } catch (error) {
+      console.warn("Could not close an untrusted KA port.", error);
+    }
+    return;
+  }
+  let requestId;
+  let closed = false;
+  let heartbeat;
+  let finishTimeout;
+  let controller;
+  const close = (disconnect = true) => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    clearTimeout(startTimeout);
+    clearTimeout(finishTimeout);
+    port.onMessage.removeListener(onMessage);
+    port.onDisconnect.removeListener(onDisconnect);
+    controller?.abort();
+    if (disconnect) {
+      try {
+        port.disconnect();
+      } catch (error) {
+        console.warn("Could not disconnect the closed KA worker port.", error);
+      }
+    }
+  };
+  const send = (message) => {
+    if (closed) return false;
+    try {
+      port.postMessage({ ...message, requestId });
+      return true;
+    } catch (error) {
+      console.warn("KA worker port send failed; cancelling its request.", error);
+      close();
+      return false;
+    }
+  };
+  const complete = (result) => {
+    clearInterval(heartbeat);
+    if (send({ type: "RESULT", ...result })) {
+      port.onMessage.removeListener(onMessage);
+      // Let the result arrive before disconnecting; bound cleanup if the tab is gone.
+      finishTimeout = setTimeout(() => close(), 10000);
+    }
+  };
+  const onDisconnect = () => {
+    const error = chrome.runtime.lastError;
+    if (error) console.warn("KA worker port disconnected.", error.message);
+    close(false);
+  };
+  const onMessage = (message) => {
+    if (closed || message?.type !== "START" || requestId) return;
+    clearTimeout(startTimeout);
+    if (typeof message.requestId !== "string" || !message.requestId) {
+      send({ type: "RESULT", ok: false, error: "Invalid bridge request ID." });
+      close();
+      return;
+    }
+    requestId = message.requestId;
+    // Own the controller, not just its lookup key: a duplicate port must never cancel its peer.
+    controller = new AbortController();
+    heartbeat = setInterval(() => send({ type: "HEARTBEAT" }), 20000);
+    proxyKaRequest(message.messages, sender, requestId, controller).then(
+      complete,
+      (error) => complete({ ok: false, error: `Knowledge Assistant bridge failed: ${error.message}` }),
+    );
+  };
+  const startTimeout = setTimeout(() => close(), 5000);
+  port.onDisconnect.addListener(onDisconnect);
+  port.onMessage.addListener(onMessage);
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "PROXY_KA_CANCEL" || msg?.type === "PROXY_KA_HEARTBEAT") {
     if (!APP_ORIGINS.has(senderOrigin(sender)) || typeof msg.requestId !== "string") {
@@ -156,7 +235,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // async response
   }
   if (msg?.type === "PROXY_KA_REQUEST") {
-    proxyKaRequest(msg.messages, sender, msg.requestId).then(sendResponse);
+    const respond = (result) => {
+      try {
+        sendResponse(result);
+      } catch (error) {
+        console.warn("Legacy KA response channel closed after completion.", error);
+      }
+    };
+    proxyKaRequest(msg.messages, sender, msg.requestId).then(
+      respond,
+      (error) => respond({ ok: false, error: `Knowledge Assistant bridge failed: ${error.message}` }),
+    );
     return true;
   }
 });
