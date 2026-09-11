@@ -35,6 +35,32 @@ extensión limpia el error de detección y muestra **Extension OK**, sin necesid
 de generar una respuesta. No borra errores de KA, app o respuesta ni restaura
 una confirmación antigua de KA.
 
+## Pruebas de respuestas RFP con Excel
+
+`node scripts/evaluate-batch.cjs INPUT.xlsx NEW_OUTPUT_DIR live 18` genera una
+respuesta KA por pregunta, de forma secuencial y sin reescrituras automáticas.
+El libro debe contener `Question`, `Answer` y una columna vacía `Answer 2`.
+Conserva las respuestas originales, escribe las nuevas en `Answer 2` y guarda
+texto bruto, respuesta normalizada, revisión, duración y estructura en JSON.
+Las respuestas originales **no se envían a KA**. Se detiene ante un fallo de red;
+el argumento opcional `question-offset` permite continuar sin repetir las
+preguntas completadas.
+
+El modo `reference` prueba la eliminación de preámbulos sobre las respuestas
+del libro, sin llamadas a KA. El modo `replay`, seguido de los JSON anteriores,
+reutiliza las generaciones guardadas y las compara con `/api/ask` en localhost
+sin generar de nuevo. Los resultados distinguen estructura Loopio de exactitud
+factual: conservar contenido o cumplir el formato no verifica sus afirmaciones.
+
+Loopio utiliza la misma plantilla en las rutas de generación. La limpieza
+elimina la voz del asistente, conserva hechos y convierte a viñetas los párrafos
+bajo encabezados temáticos existentes. No inventa secciones ni rellena respuestas
+cortas. Si faltan encabezados con viñetas o ejemplo, lo señala en Needs Review.
+El prompt solicita `BEGIN_CLIENT_ANSWER` y `END_CLIENT_ANSWER` como límites de
+entrega: la app muestra únicamente su contenido y retira los marcadores. Las
+respuestas antiguas sin marcadores siguen pasando por la limpieza de frases.
+El texto fuera de los límites no se presenta como parte de la respuesta.
+
 ## Puesta en marcha
 
 ```bash

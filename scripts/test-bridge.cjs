@@ -267,7 +267,7 @@ test("health: extension recovery clears only extension errors and never restores
   assert.equal(store.getSnapshot().extension, "detected");
   assert.equal(store.getSnapshot().error, null);
   assert.equal(store.getSnapshot().phase, "untested");
-  assert.equal(healthExports.bridgeHealthSummary(store.getSnapshot(), Date.now()).tone, "warning");
+  assert.equal(healthExports.bridgeHealthSummary(store.getSnapshot(), Date.now()).tone, "neutral");
   for (const stage of ["ka", "app", "answer"]) {
     const request = store.beginRequest();
     store.fail(request, stage, `${stage} failed`);
@@ -342,7 +342,10 @@ test("health: PING alone never confirms KA, and success expires without addition
   const store = healthExports.createBridgeHealthStore(() => now);
   const summary = () => healthExports.bridgeHealthSummary(store.getSnapshot(), now);
   store.completeProbe(store.beginProbe(), { extensionId: "one", transport: "port" });
-  assert.equal(summary().tone, "warning");
+  // A working extension with no KA request yet must be neutral, never green and
+  // never alarming.
+  assert.equal(summary().tone, "neutral");
+  assert.match(summary().label, /not tested yet/);
   assert.equal(store.getSnapshot().lastSuccessAt, null);
   const ticket = store.beginRequest();
   assert.match(summary().label, /Checking/);
@@ -355,8 +358,26 @@ test("health: PING alone never confirms KA, and success expires without addition
   assert.equal(summary().tone, "success");
   assert.equal(store.getSnapshot().lastDurationMs, 7000);
   now += healthExports.BRIDGE_CONFIRMATION_TTL_MS;
-  assert.equal(summary().tone, "warning");
-  assert.match(summary().label, /expired/);
+  assert.equal(summary().tone, "neutral");
+  assert.match(summary().label, /confirmed earlier/);
+});
+
+test("health: idle states are never green and never alarming", () => {
+  const neutral = [
+    { extension: "detected" },
+    { extension: "detected", phase: "ready", lastSuccessAt: 1 },
+  ];
+  for (const patch of neutral) {
+    const summary = healthExports.bridgeHealthSummary(
+      { ...healthExports.INITIAL_BRIDGE_HEALTH, ...patch }, 10 ** 9,
+    );
+    assert.equal(summary.tone, "neutral", summary.label);
+    assert.doesNotMatch(summary.label, /fail|error|not detected/i);
+  }
+  const missing = healthExports.bridgeHealthSummary(
+    { ...healthExports.INITIAL_BRIDGE_HEALTH, extension: "missing" }, 10 ** 9,
+  );
+  assert.equal(missing.tone, "error");
 });
 
 test("health: newer failures survive late results and successful PINGs", () => {
@@ -490,7 +511,7 @@ test("Bridge panel renders truthful local, detected, failed, expired and confirm
   assert.match(local, /Direct connection \(localhost\)/);
   assert.doesNotMatch(local, /<button|text-green-700/);
   const ping = render(true, { extension: "detected" });
-  assert.match(ping, /Extension detected; KA unverified/);
+  assert.match(ping, /Extension ready · KA not tested yet/);
   assert.doesNotMatch(ping, /text-green-700/);
   const failed = render(true, { phase: "error", errorStage: "answer", error: "No answer", kaRespondedAt: 90000 });
   assert.match(failed, /not a bridge disconnection/);
@@ -498,6 +519,21 @@ test("Bridge panel renders truthful local, detected, failed, expired and confirm
   assert.doesNotMatch(failed, /text-green-700/);
   assert.doesNotMatch(render(true, { phase: "ready", lastSuccessAt: 1 }), /text-green-700/);
   assert.match(render(true, { phase: "ready", lastSuccessAt: 99999 }), /Last request successful/);
+
+  // A working-but-legacy channel must never be styled as a failure next to a
+  // successful result, and must name the real cause.
+  const success = { phase: "ready", lastSuccessAt: 99999, extension: "detected" };
+  const port = render(true, { ...success, identity: { extensionId: "abc", extensionVersion: "1.2.0", transport: "port" } });
+  assert.doesNotMatch(port, /legacy|chrome:\/\/extensions/i);
+  const unidentified = render(true, { ...success, identity: {} });
+  assert.match(unidentified, /older build that does not identify itself/);
+  assert.match(unidentified, /chrome:\/\/extensions/);
+  assert.match(unidentified, /Last request successful/);
+  assert.doesNotMatch(unidentified, /text-amber-700|role="alert"/);
+  const legacy = render(true, { ...success, identity: { extensionId: "abc", extensionVersion: "1.0.0" } });
+  assert.match(legacy, /legacy callback channel/);
+  assert.doesNotMatch(legacy, /does not identify itself/);
+  assert.doesNotMatch(legacy, /text-amber-700|role="alert"/);
 });
 
 for (const [index, [name]] of bridges.entries()) {

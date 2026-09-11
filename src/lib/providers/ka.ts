@@ -23,8 +23,8 @@ import {
   stripNonClientFacingPassages,
   stripNonClientFacingSentences,
 } from "../promptMapping";
-import { resolveMode, plainifyAnswer, enforceBullets } from "../promptTemplate";
-import { hasSubstantiveAnswer, separateClientFacingResponse } from "../responsePolicy";
+import { resolveMode, plainifyAnswer, enforceBullets, formatLoopioSections } from "../promptTemplate";
+import { extractClientAnswer, hasSubstantiveAnswer, loopioFormatIssues, separateClientFacingResponse } from "../responsePolicy";
 import type { GenerateOpts, ProviderAnswer } from "./types";
 
 export function normalizeBridgedKaResponse(
@@ -37,7 +37,8 @@ export function normalizeBridgedKaResponse(
     (source) => !isInternalSourceUrl(source.uri ?? ""),
   );
   const confidence = extractConfidenceReview(rawText);
-  const note = extractConfidenceNote(confidence.text);
+  const frame = mode === "loopio" ? extractClientAnswer(confidence.text) : { text: confidence.text, incomplete: false };
+  const note = extractConfidenceNote(frame.text);
   const sourceHeading = note.text.search(/^\s*(?:#{1,6}\s*|\*\*)?(?:sources?|references?)\s*(?:\*\*)?\s*:?\s*$/im);
   const body = !isCustomMode && sourceHeading >= 0
     ? note.text.slice(0, sourceHeading)
@@ -53,6 +54,7 @@ export function normalizeBridgedKaResponse(
   if (mode === "bulleted") answer = enforceBullets(answer);
   if (mode === "loopio") {
     answer = answer.replace(/^\s*(?:Partially|No)\.\s*/i, "");
+    answer = formatLoopioSections(answer);
   }
 
   const urls = Array.from(
@@ -68,6 +70,7 @@ export function normalizeBridgedKaResponse(
     answer = `${answer}\n\nSources: ${sourcesText}`;
   }
   const noteNeedsReview = Boolean(note.note) && !/^(?:high|confident|full)(?:\b|$)/i.test(note.note);
+  const formatIssues = mode === "loopio" ? loopioFormatIssues(answer) : [];
   const reviewReasons = [...new Set([
     confidence.reason,
     normalizedConfidence.reason,
@@ -75,6 +78,8 @@ export function normalizeBridgedKaResponse(
     ...separated.limitations,
     ...separateReviewLimitations(separated.answer).limitations,
     isClarificationRequest(body) ? "The response asks for clarification; review the interpretation." : "",
+    formatIssues.length ? `Incomplete Loopio format: missing ${formatIssues.join("; ")}. The available answer is preserved, not padded with invented content.` : "",
+    frame.incomplete ? "The client-answer boundary was incomplete; review for a truncated response." : "",
   ].filter(Boolean))];
 
   return {
@@ -94,7 +99,7 @@ export async function kaGenerate(opts: GenerateOpts): Promise<ProviderAnswer> {
   // Batch and Redo use exactly the same prompt and normalization as the bridge.
   // No curated override may discard owner-provided guidance, and no rewrite is
   // generated behind the batch scheduler's back.
-  if (opts.confidenceReview) {
+  if (opts.confidenceReview || mode === "loopio") {
     const content = buildKaUserContent(opts.question, { ...opts, mode });
     const result = await kaChat([{ role: "user", content }], {
       retries: 0,
@@ -249,9 +254,6 @@ ${originalDraft}`;
       reviewReason =
         "Verify the claims that rely on internal or insufficiently supported reasoning.";
     }
-  }
-  if (mode === "loopio") {
-    answer = answer.replace(/^\s*(?:Partially|No)\.\s*/i, "");
   }
   if (!isCustomMode) {
     const separated = separateReviewLimitations(answer);

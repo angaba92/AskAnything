@@ -8,6 +8,7 @@ const TONES = {
   warning: "bg-amber-50 text-amber-700",
   error: "bg-red-50 text-red-700",
   info: "bg-blue-50 text-blue-700",
+  neutral: "bg-gray-100 text-gray-600",
 };
 
 export function BridgeBadge() {
@@ -45,6 +46,8 @@ export default function BridgeStatus({ busy, testing, onTest, onStop }: {
   );
 
   const active = ["discovering", "requesting", "processing"].includes(state.phase);
+  const legacyTransport = state.identity !== null && state.identity.transport !== "port";
+  const unidentifiedBridge = legacyTransport && !state.identity?.extensionId;
   return (
     <section className="mt-3 space-y-4 rounded-xl border border-gray-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -83,12 +86,17 @@ export default function BridgeStatus({ busy, testing, onTest, onStop }: {
         <div><dt className="text-xs text-gray-500">{active ? "Current request elapsed" : "Last successful request duration"}</dt>
           <dd>{active && state.startedAt !== null ? `${Math.max(0, (now - state.startedAt) / 1000).toFixed(0)}s` :
             state.lastDurationMs !== null ? `${(state.lastDurationMs / 1000).toFixed(1)}s` : "Not yet"}</dd></div>
-        <div><dt className="text-xs text-gray-500">Selected extension</dt><dd className="break-all">{state.identity?.extensionId || "Not identified"}</dd></div>
-        <div><dt className="text-xs text-gray-500">Version / transport</dt><dd>{state.identity?.extensionVersion || "Unknown"} / {state.identity?.transport || "Unknown"}</dd></div>
+        <div><dt className="text-xs text-gray-500">Selected extension</dt><dd className="break-all">{state.identity?.extensionId || (state.identity ? "Not identified (older build)" : "Not identified")}</dd></div>
+        <div><dt className="text-xs text-gray-500">Version / transport</dt><dd>{state.identity?.extensionVersion || "Unknown"} / {state.identity?.transport || (state.identity ? "legacy callback" : "Unknown")}</dd></div>
       </dl>
-      {state.identity && state.identity.transport !== "port" && (
-        <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-700">
-          Legacy callback transport detected. Update/reload the extension and this tab to use the dedicated port.
+      {legacyTransport && (
+        // Informational, not a failure: these requests still work, so this must not
+        // contradict a successful result shown above.
+        <p className="rounded-lg bg-blue-50 p-3 text-xs text-blue-700">
+          {unidentifiedBridge
+            ? "The extension answering is an older build that does not identify itself, so reloading the updated one will not change this while the old copy stays enabled. Open chrome://extensions, remove or disable the outdated AskAnything bridge, then reload this tab."
+            : "This extension is answering over the legacy callback channel instead of the dedicated port. Reload it in chrome://extensions and reload this tab to switch."}
+          {" "}Requests still work over this channel; long requests are just more likely to be interrupted.
         </p>
       )}
       {state.error && (

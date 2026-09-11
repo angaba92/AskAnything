@@ -100,7 +100,7 @@ export function createBridgeHealthStore(now = Date.now) {
 
 export const bridgeHealth = createBridgeHealthStore();
 
-export function bridgeHealthSummary(state: BridgeHealth, now: number): { label: string; tone: "success" | "warning" | "error" | "info" } {
+export function bridgeHealthSummary(state: BridgeHealth, now: number): { label: string; tone: "success" | "warning" | "error" | "info" | "neutral" } {
   if (state.online === false) return { label: "Browser offline", tone: "error" };
   if (state.phase === "error") return {
     label: state.errorStage === "answer" ? "Answer needs attention" : `${state.errorStage === "app" ? "App" : "Bridge"} request failed`,
@@ -112,9 +112,14 @@ export function bridgeHealthSummary(state: BridgeHealth, now: number): { label: 
   if (state.phase === "cancelled") return { label: "Request cancelled; unverified", tone: "warning" };
   if (state.extension === "missing") return { label: "Extension not detected", tone: "error" };
   if (state.phase === "ready" && state.lastSuccessAt !== null) {
+    // Nothing has failed once a request has succeeded: an expired confirmation is
+    // simply stale, so it stays neutral instead of looking like a problem.
     return now >= state.lastSuccessAt && now - state.lastSuccessAt < BRIDGE_CONFIRMATION_TTL_MS
       ? { label: "Last request successful", tone: "success" }
-      : { label: "Confirmation expired", tone: "warning" };
+      : { label: "Extension ready · KA confirmed earlier", tone: "neutral" };
   }
-  return { label: state.extension === "detected" ? "Extension detected; KA unverified" : "Bridge not checked", tone: "warning" };
+  // A working extension with no KA request yet is a normal idle state, not a fault.
+  return state.extension === "detected"
+    ? { label: "Extension ready · KA not tested yet", tone: "neutral" }
+    : { label: "Checking extension", tone: "info" };
 }

@@ -9,7 +9,7 @@ export const CLIENT_FACING_RFP_POLICY = `CLIENT-FACING RFP RULES (mandatory):
 - Never mention searches, available sources, knowledge bases, internal or public documentation, inaccessible information, model limitations, missing access, or an inability to locate information.
 - Never tell the customer to contact an account representative, Sales, Marketing, Legal, or another internal team.
 - This is a bulk questionnaire: never ask a clarifying or follow-up question. Use the most commercially relevant interpretation and answer immediately. If several interpretations are plausible, lead with the most likely one and briefly cover the alternatives.
-- Do not withhold the entire answer because exact confidential details are unavailable. Provide every supported, relevant point first, then use a short due-diligence statement only for the specific details that cannot be disclosed.
+- Do not withhold the entire answer because exact confidential details are unavailable. Provide every supported, relevant point first; put undisclosed specifics only in CONFIDENCE_REVIEW, never in a client-facing due-diligence statement.
 - Do not invent facts, commitments, certifications, awards, analyst positions, operational events, or contractual terms.
 - Frame the client-facing answer positively around supported capabilities. Never open with "Partially.", "No.", or a limitation. Put uncertainty or missing evidence in the internal confidence-review signal, not in the opening.
 - Never convert missing evidence into a negative factual claim such as "does not maintain", "has not received", "there are no", or "no material events". Lack of evidence is not evidence of absence.
@@ -74,9 +74,31 @@ const RESEARCH_STATUS = new RegExp(
 const RESEARCH_UNCERTAINTY =
   /\b(?:limited|little|insufficient|missing|incomplete|unavailable|unable|cannot|could not|not|no|only)\b/i;
 
+// Vendor copy uses "we", not the assistant's first-person singular voice.
+// Recognize that voice independently of the ever-changing research vocabulary.
+const ASSISTANT_VOICE = /^(?:(?:now|first|next|finally|therefore|however)[,:]?\s+)?(?:i\b|i['’](?:m|ve|ll|d)\b|let me\b|my\s+(?:search|answer|response|research|analysis)\b)/i;
+const ANSWER_ANNOUNCEMENT = /^[\s*_#`]*(?:(?:and|so|now)[,:]?\s+)?(?:here|below)\s+(?:is|are)\s+(?:the|an?|our|my|your)\s+(?:(?:[\w-]+)\s+){0,5}(?:answer|response)[*_`]*\s*(?::|[.!]|$)[*_`]*\s*/i;
+const ANSWER_PREPARATION = /^(?:to|in order to)\s+(?:provide|write|prepare|give|produce|compose)\b[^.!?\n]*\b(?:answer|response)\b/i;
+
+export const CLIENT_ANSWER_FRAME_INSTRUCTION = `DELIVERY BOUNDARY:
+Put the entire customer-facing answer, including its sections, example and optional public references, between these two standalone lines:
+BEGIN_CLIENT_ANSWER
+<the customer-facing answer>
+END_CLIENT_ANSWER
+Put CONFIDENCE_REVIEW after END_CLIENT_ANSWER. Do not put research narration, search progress or answer announcements inside the boundary. The boundary lines are transport markers, not headings, and will be removed by the application.`;
+
+export function extractClientAnswer(text: string): { text: string; incomplete: boolean } {
+  const start = /^[ \t]*BEGIN_CLIENT_ANSWER[ \t]*\r?$/im.exec(text);
+  if (!start) return { text: text.replace(/^[ \t]*END_CLIENT_ANSWER[ \t]*\r?$/gim, "").trim(), incomplete: false };
+  const remaining = text.slice(start.index + start[0].length);
+  const end = /^[ \t]*END_CLIENT_ANSWER[ \t]*\r?$/im.exec(remaining);
+  return { text: (end ? remaining.slice(0, end.index) : remaining).trim(), incomplete: !end };
+}
+
 /** Detecta lenguaje sobre búsquedas/limitaciones internas no apto para clientes. */
 export function hasNonClientFacingLanguage(text: string): boolean {
-  return RESEARCH_STATUS.test(text.trim()) ||
+  return ASSISTANT_VOICE.test(text.trim()) || ANSWER_ANNOUNCEMENT.test(text.trim()) || ANSWER_PREPARATION.test(text.trim()) || NAMED_SOURCE_COMMENTARY.test(text.trim()) ||
+    RESEARCH_STATUS.test(text.trim()) ||
     NON_CLIENT_FACING_PATTERNS.some((pattern) => pattern.test(text));
 }
 
@@ -172,6 +194,25 @@ export function lacksDirectAnswerOpening(text: string): boolean {
   return looksLikeHeading;
 }
 
+/** Structural checks do not assert factual accuracy or invent missing content. */
+export function loopioFormatIssues(text: string): string[] {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const issues: string[] = [];
+  if (lacksDirectAnswerOpening(text)) issues.push("a direct opening paragraph");
+  const sections = lines.filter((line, index) => {
+    const words = line.split(/\s+/);
+    return words.length >= 2 && words.length <= 4 &&
+      /^[A-Z][A-Za-z0-9 &/-]+$/.test(line) && /^•\s+\S/.test(lines[index + 1] || "");
+  });
+  if (!sections.length) issues.push("themed headings with concrete bullets");
+  if (!lines.some((line) => /^(?:for|as an) example[,:\s]/i.test(line))) {
+    issues.push("a practical example");
+  }
+  const words = text.replace(/https?:\/\/\S+/g, "").split(/\s+/).filter(Boolean).length;
+  if (words > 550) issues.push("a concise answer no longer than 550 words");
+  return issues;
+}
+
 /**
  * Elimina preámbulos de razonamiento que algunos modelos imprimen antes de una
  * respuesta válida. No reescribe el contenido sustantivo: solo descarta líneas
@@ -186,11 +227,13 @@ export function stripNonClientFacingPreamble(text: string): string {
       // URLs must remain byte-for-byte intact.
       return line.split(/(?<=[.!?])\s+(?=[A-Z])/).map((part) => {
         const value = part
+          .replace(/^\s*let me\b[^.!?\n:]*:\s*/i, "")
           .replace(/^\s*(?:perfect|great|certainly|sure)[.!,:]\s*/i, "")
           .replace(/^\s*(?:based on|according to)\b[^,;:\n]*\b(?:documentation|information|sources?|materials?|search|research|knowledge|guru)\b[^,;:\n]*[,;:]\s*/i, "")
           .replace(/^\s*(?:here|below) (?:is|are) (?:the|an|our) (?:final |rfp[-\s]?ready )?(?:answer|response)\s*:\s*/i, "");
-        const statusOnly = RESEARCH_STATUS.test(value.trim()) && !RESEARCH_UNCERTAINTY.test(value);
-        return statusOnly || PROCESS_ONLY_LINE_PATTERNS.some((pattern) => pattern.test(value)) ? "" : value;
+        const withoutAnnouncement = value.replace(ANSWER_ANNOUNCEMENT, "");
+        const statusOnly = RESEARCH_STATUS.test(withoutAnnouncement.trim()) && !RESEARCH_UNCERTAINTY.test(withoutAnnouncement);
+        return statusOnly || PROCESS_ONLY_LINE_PATTERNS.some((pattern) => pattern.test(withoutAnnouncement)) ? "" : withoutAnnouncement;
       }).filter(Boolean).join(" ");
     })
     .filter((line): line is string => line !== null);
@@ -208,9 +251,12 @@ export function stripNonClientFacingSentences(text: string): string {
 }
 
 const DOCUMENTATION_GAP =
-  /\bnot\s+(?:(?:publicly|explicitly|fully|comprehensively|currently)\s+)?(?:documented|described|disclosed|published|detailed|quantified|specified|verified|confirmed|substantiated)\b|\b(?:documentation|sources?|information)\b[^.!?\n]*\b(?:does not|do not|cannot|can't|lack|lacks|missing|unavailable)\b|\b(?:metrics?|figures?|benchmarks?|specifications?)\b[^.!?\n]*\bnot available\b/i;
+  /\bnot\s+(?:(?:publicly|explicitly|fully|comprehensively|currently)\s+)?(?:documented|described|disclosed|published|detailed|quantified|specified|verified|confirmed|substantiated|mentioned|referenced)\b|\b(?:documentation|sources?|information)\b[^.!?\n]*\b(?:does not|do not|cannot|can't|lack|lacks|missing|unavailable)\b|\b(?:metrics?|figures?|benchmarks?|specifications?)\b[^.!?\n]*\bnot available\b/i;
 const SOURCE_COMMENTARY =
   /^(?:however[, ]+)?(?:the\s+)?(?:(?:available|public|published|accessible|provided|developer|technical|internal|product)\s+)*(documentation|sources?|resources?|materials?|references?|evidence|search results?|knowledge base)\s+(covers?|describes?|mentions?|references?|includes?|contains?|provides?|details?|does|do|is|are|lacks?|omits?|focus(?:es|ed)?|emphasi[sz]es?|discuss(?:es)?|address(?:es)?|outlines?|explains?|highlights?|indicates?|suggests?|shows?|states?|notes?|confirms?|offers?|lists?)\b/i;
+const NAMED_SOURCE_COMMENTARY =
+  /^(?:the\s+)?(?:[\w./'-]+\s+){0,6}(?:guide|documentation|article|sources?|references?)\s+(?:\w+ly\s+)*(?:mentions?|describes?|discuss(?:es)?|focus(?:es)?|covers?|states?|notes?|indicates?|shows?|provides?|does|do)\b/i;
+const MISSING_SOURCE_EVIDENCE = /\bno\s+(?:evidence|mention)\b[^.!?\n]*\b(?:sources?|documentation|knowledge base)\b/i;
 const INTERNAL_REFERRAL =
   /\b(?:contact|consult|reach out to|work(?:ing)? with|speak (?:to|with))\b[^.!?\n]*\b(?:account (?:representative|team|manager)|technical (?:support|consultation)|(?:sales|support|legal|implementation|product) team)\b|\b(?:account representative|sales team|support team|technical consultation)\b[^.!?\n]*\b(?:provide|available|confirm|details|specifications)\b/i;
 
@@ -219,8 +265,8 @@ function editorialSentence(text: string): boolean {
   const source = SOURCE_COMMENTARY.exec(value);
   const sourceCommentary = source !== null &&
     !(/^(?:resources?|materials?)$/i.test(source[1]) && /^(?:is|are)$/i.test(source[2]));
-  return RESEARCH_STATUS.test(value) ||
-    DOCUMENTATION_GAP.test(value) || sourceCommentary ||
+  return ASSISTANT_VOICE.test(value) || ANSWER_ANNOUNCEMENT.test(value) || ANSWER_PREPARATION.test(value) || RESEARCH_STATUS.test(value) ||
+    DOCUMENTATION_GAP.test(value) || MISSING_SOURCE_EVIDENCE.test(value) || sourceCommentary || NAMED_SOURCE_COMMENTARY.test(value) ||
     INTERNAL_REFERRAL.test(value) || isClarificationRequest(value) ||
     (/^(?:i|we|based on|the only)\b/i.test(value) && hasNonClientFacingLanguage(value));
 }
@@ -248,7 +294,7 @@ export function separateClientFacingResponse(text: string): SeparatedReviewLimit
     const answerParts: string[] = [];
     for (const part of parts) {
       const value = stripNonClientFacingPreamble(part).replace(
-        /^(\s*(?:[•*+-]\s+)?)(?:the\s+)?(?:(?:available|public|published|developer|technical|product)\s+)*documentation (?:states|confirms|notes|indicates|explains) that\s+/i,
+        /^(\s*(?:[•*+-]\s+)?)(?:the\s+)?(?:[\w./'-]+\s+){0,6}(?:guide|documentation|article|sources?|references?)\s+(?:\w+ly\s+)*(?:states?|confirms?|notes?|indicates?|explains?|shows?)\s+that\s+/i,
         "$1",
       );
       if (!value.trim() || /^[\s•*#_`+-]+$/.test(value)) continue;

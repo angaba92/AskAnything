@@ -40,17 +40,16 @@ Then one short paragraph with a practical, real-world example. Introduce it natu
 
 If you have supporting documentation, finish with a single final line that starts with "Sources: " followed by the full URL(s), separated by "; ". If you genuinely have no sources, omit that line entirely.`;
 
-const LOOPIO_INSTRUCTIONS = `Write the answer in PLAIN TEXT only (RFP/questionnaire style). Do NOT use Markdown: no "#", no "**"/"*" for bold/italic, no dashes for bullets. Use "• " (a real bullet character) for bullets.
+const LOOPIO_INSTRUCTIONS = `Write a developed Loopio RFP answer in PLAIN TEXT, without Markdown. Separate blocks with blank lines:
+1) A direct opening paragraph about supported Dynamic Yield capabilities. Use "Yes." only for an appropriate yes/no question, never force it.
+2) Themed sections: short 2-4 word Title Case headings on separate lines, without colons. Use at most 3 sections and 4-8 "• " bullets TOTAL across the answer. Each bullet is concise (maximum two sentences) and may combine related requirement clauses. A simple question needs one section.
+3) ALWAYS include one supported practical example starting "For example, ".
+4) Optional final line: "For more information, please refer to our " followed by resource names and full public URLs in parentheses. Never invent a URL.
 
-Follow this exact structure, with a blank line between blocks:
-
-1) Start with one positive, direct paragraph about supported Mastercard Dynamic Yield capabilities. Use "Yes." only when it naturally and fully answers a yes/no question; never force it. NEVER start with "No." or "Partially.". Move uncertainty or unsupported detail to the internal review signal rather than the client-facing answer.
-
-2) One or more short THEMED sections. Each section begins with a very short heading of 2 to 4 words in plain text (Title case, NOT all caps, NO colon, NO markdown), on its own line — for example "Placement options", "Control", "Configuration", "Measurement and optimization". Under each heading, list its points as "• " bullets, each a complete, specific point. Use a SINGLE section for simple answers and MULTIPLE sections only when the answer has distinct themes. Group related points under the right heading instead of one long flat list.
-
-3) One short paragraph introduced naturally with "For example, ".
-
-4) A closing line that starts with "For more information, please refer to our " followed by the resource name and its full URL in parentheses, e.g. "For more information, please refer to our Recommendation Strategies article (https://support.dynamicyield.com/hc/en-us/articles/360022554694-Recommendation-Strategies)." You may cite more than one, joined with " and our ". If you genuinely have no source, omit this line.`;
+For multi-part technical questions aim for 180-350 words covering each supported aspect, not a one-sentence product summary. HARD MAXIMUM: 450 words. Prioritize, combine related clauses and omit repetition instead of exceeding it. Do not pad or invent facts to reach a target.
+Missing exact measurements must not erase supported implementation details, controls, trade-offs or examples. Put only missing specifics in CONFIDENCE_REVIEW, not whole topics.
+For a named third-party integration, distinguish a pre-built connector from a proposed custom design using supported APIs/feeds. Describe supported design options, ownership and implementation-dependent behavior without claiming an undocumented connector or refusing the whole answer.
+Never announce the answer or narrate research. Never end with documentation gaps, contact-us, validation, NDA or due-diligence prose: those belong only in CONFIDENCE_REVIEW.`;
 
 /** Activa/desactiva la plantilla vía env (por defecto: activada). */
 export function isTemplateEnabled(): boolean {
@@ -157,6 +156,29 @@ export function plainifyAnswer(text: string): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/** Restore bullet layout under existing themed headings without adding any facts. */
+export function formatLoopioSections(text: string): string {
+  let inSection = false;
+  return text.split(/\n{2,}/).map((block, index) => {
+    const value = block.trim();
+    if (/^(?:(?:for|as an) example\b|for more information\b|sources?:)/i.test(value)) {
+      inSection = false;
+      return value;
+    }
+    const lines = value.split(/\r?\n/);
+    const words = lines[0].split(/\s+/);
+    const heading = index > 0 && words.length >= 2 && words.length <= 4 &&
+      words.every((word) => /^(?:[A-Z][A-Za-z0-9/-]*|and|or|for|of|the|in|to|&)$/.test(word));
+    if (heading) {
+      inSection = true;
+      if (lines.length === 1) return value;
+      return `${lines[0]}\n${/^•\s/.test(lines[1]) ? "" : "• "}${lines.slice(1).join("\n")}`;
+    }
+    if (inSection && value && !/^•\s/.test(value)) return `• ${value}`;
+    return value;
+  }).join("\n\n");
 }
 
 /**

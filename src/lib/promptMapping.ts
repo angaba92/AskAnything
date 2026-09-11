@@ -16,8 +16,10 @@
  */
 
 import type { AnswerMode } from "./promptTemplate";
+import { instructionsFor } from "./promptTemplate";
 import {
   CLIENT_FACING_RFP_POLICY,
+  CLIENT_ANSWER_FRAME_INSTRUCTION,
   CONFIDENCE_REVIEW_INSTRUCTION,
   clientFacingFallback,
   extractConfidenceReview,
@@ -95,8 +97,7 @@ const KA_STYLE_INSTRUCTIONS: Record<AnswerMode, string | null> = {
     'Answer in plain prose (no markdown headings, no bullet points). Start with one paragraph that answers directly, then 3-4 paragraphs of depth, then one paragraph with a concrete real-world example. Finish with a single line "Sources: " listing the full URL(s) separated by "; " (omit the line if you have none).',
   bulleted:
     'Answer in plain text. Start with 1-2 sentences that answer directly. Then 4-7 bullets, each on its own line starting with "\u2022 " and self-contained (a couple of sentences is fine). Then a short paragraph starting "As an example, ". Finish with a single line "Sources: " listing the full URL(s) separated by "; " (omit the line if you have none).',
-  loopio:
-    'Answer in client-facing Loopio RFP style using plain text. Begin with one positive, direct paragraph about supported Mastercard Dynamic Yield capabilities. Start with "Yes." only when it naturally and fully answers a yes/no question; never force it, and NEVER begin with "No." or "Partially.". Add one or more short 2-4 word Title Case themed headings with no colon or Markdown, followed by concrete "\u2022 " bullets. Add a concise practical example when relevant. Finish with an optional line beginning "For more information, please refer to our " followed by named resources and full URLs. NEVER add a final limitation, caveat, documentation-gap, validation, NDA, or due-diligence paragraph. Put every such detail only in CONFIDENCE_REVIEW.',
+  loopio: instructionsFor("loopio"),
   custom: null,
 };
 
@@ -146,5 +147,13 @@ export function buildKaUserContent(
     // de confianza, que ocupaba ~1K y hacía fallar prompts cercanos a 8K.
     return `Question:\n${q}${context}\n\n${customPrompt}`;
   }
-  return `Question:\n${q}${context}${style}\n\n${CLIENT_FACING_RFP_POLICY}${confidence}`;
+  const outputContract = opts.mode === "loopio"
+    ? "\n\nFINAL OUTPUT CHECK: Return the customer answer directly, without an introduction about writing it. Include the opening, themed bullet sections and a supported practical example. A one-sentence product description is NOT a completed Loopio response. Cover supported aspects even when an exact figure is unknown. Put only the missing specifics in the final CONFIDENCE_REVIEW line."
+    : "";
+  const boundary = opts.mode === "loopio" ? `\n\n${CLIENT_ANSWER_FRAME_INSTRUCTION}` : "";
+  const content = `Question:\n${q}${context}${style}\n\n${CLIENT_FACING_RFP_POLICY}${confidence}${outputContract}${boundary}`;
+  if (content.length > 8000) {
+    throw new Error(`The full Knowledge Assistant prompt is ${content.length} characters; its limit is 8000. Shorten the question or supporting context before retrying.`);
+  }
+  return content;
 }
