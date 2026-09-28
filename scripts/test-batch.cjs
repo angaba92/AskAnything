@@ -15,6 +15,11 @@ const { hasSubstantiveAnswer } = require("../src/lib/responsePolicy.ts");
 const { readBatchAnswer } = require("../src/lib/batchResponse.ts");
 const opts = { question: "What is the SDK footprint?", mode: "loopio", confidenceReview: true };
 const normalize = (text, overrides = {}) => normalizeBridgedKaResponse(text, { ...opts, ...overrides });
+// Grounding flags (unsourced answers) are covered in test-ka-format.cjs; these
+// fixtures intentionally omit sources, so compare only the other review reasons.
+const GROUNDING = /^(?:No official source was returned|UNSOURCED HIGH-RISK CLAIMS|Cited source outside official)/;
+const otherReasons = (result) => result.reviewReason.split(/\n{2,}/).filter((r) => r && !GROUNDING.test(r)).join("\n\n");
+const reviewBeyondGrounding = (result) => otherReasons(result).length > 0;
 const loopioBody = `Mastercard Dynamic Yield supports server-side personalization through the Experience API.
 
 Decision Delivery
@@ -128,7 +133,13 @@ test("KA Loopio uses the full shared template and keeps missing specifics out of
   assert.match(content, /ALWAYS include one supported practical example/);
   assert.match(content, /FINAL OUTPUT CHECK/);
   assert.match(content, /BEGIN_CLIENT_ANSWER/);
-  assert.ok(content.length < 7000, "leave room for question and owner context inside KA's 8000-character limit");
+  assert.ok(content.length < 8000);
+  assert.match(content, /ALWAYS ANSWER: never return NO_ANSWER/);
+  // Optional guidance yields space: owner context of 1,000 chars still fits.
+  const withContext = buildKaUserContent("What is the SDK footprint?", { mode: "loopio", confidenceReview: true, context: "c".repeat(1000), recovery: true });
+  assert.ok(withContext.length <= 8000);
+  assert.match(withContext, /RECOVERY: the previous attempt/);
+  assert.match(withContext, /BEGIN_CLIENT_ANSWER/);
   assert.throws(() => buildKaUserContent("Question?", { mode: "loopio", context: "x".repeat(8000) }), /full Knowledge Assistant prompt/);
   assert.doesNotMatch(content, /use a short due-diligence statement/);
   const custom = buildKaUserContent("Question?", { mode: "custom", customPrompt: "My format" });
@@ -145,7 +156,7 @@ More unrequested internal commentary.
 CONFIDENCE_REVIEW: YES | Confirm the customer configuration.`;
   const result = normalize(raw);
   assert.equal(result.answer, loopioBody);
-  assert.equal(result.reviewReason, "Confirm the customer configuration.");
+  assert.equal(otherReasons(result), "Confirm the customer configuration.");
   const incomplete = normalize(`BEGIN_CLIENT_ANSWER\n${loopioBody}`);
   assert.equal(incomplete.answer, loopioBody);
   assert.match(incomplete.reviewReason, /boundary was incomplete/);
@@ -208,7 +219,7 @@ for (const example of openingRegressions) {
       test(`${example.name}: direct opening in ${mode}, separator=${JSON.stringify(separator)}`, () => {
         const result = normalize(example.preamble + separator + example.body, { mode, customPrompt: "Keep the requested format." });
         assert.equal(result.answer, example.body);
-        assert.equal(result.reviewRequired, example.review || mode === "loopio");
+        assert.equal(reviewBeyondGrounding(result), Boolean(example.review || mode === "loopio"));
         if (mode === "loopio") assert.match(result.reviewReason, /Incomplete Loopio format/);
         if (example.review) {
           // Each removed sentence is listed on its own line in Review.
@@ -328,7 +339,7 @@ test("formatted confidence markers and high-confidence notes stay out of answers
   const result = normalize("Dynamic Yield supports personalization.\n**CONFIDENCE_REVIEW:** YES | Check SLA.\n_Confidence: high_");
   assert.doesNotMatch(result.answer, /CONFIDENCE|Confidence|Check SLA/);
   assert.match(result.reviewReason, /Check SLA/);
-  assert.equal(normalize("Dynamic Yield supports personalization.\n_Confidence: high_", { mode: "simple" }).reviewRequired, false);
+  assert.equal(reviewBeyondGrounding(normalize("Dynamic Yield supports personalization.\n_Confidence: high_", { mode: "simple" })), false);
 });
 
 test("source-only, header-only and metadata-only drafts never count as answers", () => {

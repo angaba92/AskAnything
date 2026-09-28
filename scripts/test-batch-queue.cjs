@@ -23,6 +23,7 @@ function harness({ hostname = "demo.example", apiStatus = 200 } = {}) {
     createContext: () => ({ Provider: "provider" }),
     useContext: () => null,
     useCallback: (callback) => callback,
+    useEffect: () => {},
     useRef: (initial) => {
       const index = cursor++;
       return slots[index] ??= { current: initial };
@@ -173,10 +174,13 @@ test("standalone Redos serialize and block Start and remapping synchronously", a
   assert.equal(h.render().rows[1].answer, "A revised second answer.");
 });
 
-test("quality failure advances without regenerating; Redo can repair failed rows", async () => {
+test("unusable answer gets ONE recovery attempt, then advances; Redo can repair failed rows", async () => {
   const h = harness();
   const run = h.render().run();
   await h.waitFor(() => h.queued.length === 1);
+  h.queued.shift().resolve("EMPTY");
+  await h.waitFor(() => h.queued.length === 1);
+  assert.equal(h.queued[0].options.recovery, true, "second attempt uses recovery instructions");
   h.queued.shift().resolve("EMPTY");
   await h.waitFor(() => h.queued.length === 1);
   assert.match(h.queued[0].question, /three/);
@@ -237,6 +241,9 @@ test("Redo quality failure is not a transport failure and preserves the previous
   const redo = h.render().redoRow(1, "Owner notes");
   await h.waitFor(() => h.queued.length === 1);
   h.queued.shift().resolve("EMPTY");
+  await h.waitFor(() => h.queued.length === 1);
+  assert.equal(h.queued[0].options.recovery, true);
+  h.queued.shift().resolve("EMPTY");
   await redo;
   assert.equal(h.health.getSnapshot().phase, "error");
   assert.equal(h.health.getSnapshot().errorStage, "answer");
@@ -275,7 +282,7 @@ test("floating batch indicator distinguishes idle, running, paused and finished"
     const localRequire = (name) => {
       if (name === "react") return {
         createContext: () => ({ Provider: "provider" }), useContext: () => null,
-        useCallback: (callback) => callback, useRef: (value) => ({ current: value }),
+        useCallback: (callback) => callback, useEffect: () => {}, useRef: (value) => ({ current: value }),
         useState: (value) => [value, () => {}],
       };
       if (name === "react/jsx-runtime") return { jsx: () => null, jsxs: () => null };
@@ -294,16 +301,20 @@ test("floating batch indicator distinguishes idle, running, paused and finished"
   assert.ok(label, "keep the main provider harness initialized");
 });
 
-test("empty raw KA answer advances as a quality failure instead of generating again", async () => {
+test("empty raw KA answer is recovered by the single recovery attempt", async () => {
   const h = harness();
   const { BatchRequestError } = require("../src/lib/batchResponse.ts");
   const run = h.render().run();
   await h.waitFor(() => h.queued.length === 1);
   h.queued.shift().reject(new BatchRequestError("Knowledge Assistant returned an empty answer.", 422));
   await h.waitFor(() => h.queued.length === 1);
+  assert.equal(h.queued[0].options.recovery, true);
+  h.queued.shift().resolve("A recovered substantive first answer.");
+  await h.waitFor(() => h.queued.length === 1);
   assert.match(h.queued[0].question, /three/);
   h.queued.shift().resolve("A substantive third answer.");
   await run;
-  assert.equal(h.requests.length, 2);
-  assert.equal(h.render().rows[0].status, "error");
+  assert.equal(h.requests.length, 3);
+  assert.equal(h.render().rows[0].status, "done");
+  assert.equal(h.render().rows[0].answer, "A recovered substantive first answer.");
 });

@@ -127,6 +127,11 @@ export default function BatchPage() {
     testingBridge,
     logs,
     clearLogs,
+    fileName,
+    restoredAt,
+    restoredInterrupted,
+    dismissRestored,
+    discardBatch,
   } = useBatch();
 
   const [activeTab, setActiveTab] = useState<"rows" | "logs" | "bridge">("rows");
@@ -365,8 +370,47 @@ export default function BatchPage() {
       <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-700">
         The batch keeps running in the background if you switch to another
         conversation. A floating badge (bottom-right) shows progress and brings
-        you back here.
+        you back here. Progress is saved automatically in this browser, so a
+        reload or closed tab does not lose completed rows.
       </div>
+
+      {restoredAt !== null && fileName && (
+        <div
+          className={`mb-4 flex items-center justify-between gap-3 rounded-lg border px-4 py-2 text-sm ${
+            restoredInterrupted
+              ? "border-amber-300 bg-amber-50 text-amber-800"
+              : "border-green-200 bg-green-50 text-green-800"
+          }`}
+        >
+          <span>
+            {restoredInterrupted
+              ? "Batch restored after an interruption. The in-flight row was reset to pending — press Run to resume."
+              : "Batch restored from your last local save."}{" "}
+            <span className="text-xs opacity-75">
+              Saved {new Date(restoredAt).toLocaleString()} · {fileName}
+            </span>
+          </span>
+          <span className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={dismissRestored}
+              className="rounded-lg border border-current px-2 py-1 text-xs"
+            >
+              OK
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm("Discard the saved batch (workbook, answers, reviews, logs) from this browser?")) discardBatch();
+              }}
+              className="rounded-lg border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-40"
+            >
+              Discard
+            </button>
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
@@ -754,6 +798,7 @@ export default function BatchPage() {
                   <td className="p-2">{r.question}</td>
                   <td className="whitespace-pre-wrap p-2 text-gray-700">
                     {r.answer}
+                    <SourceList sources={r.sources} hasAnswer={r.status === "done" && Boolean(r.answer.trim())} />
                     {(r.answer.trim() || r.status === "error") && (
                       <RedoAnswer
                         rowIndex={i}
@@ -834,6 +879,25 @@ export default function BatchPage() {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+function SourceList({ sources, hasAnswer }: { sources: string; hasAnswer: boolean }) {
+  if (!hasAnswer) return null;
+  const urls = Array.from(new Set(sources.match(/https?:\/\/[^\s;,)]+/g) ?? []));
+  if (urls.length === 0) return null;
+  return (
+    <div className="mt-2 whitespace-normal rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
+      <span className="font-semibold">Sources ({urls.length}):</span>{" "}
+      {urls.map((url, index) => (
+        <span key={url}>
+          {index > 0 && " · "}
+          <a href={url} target="_blank" rel="noreferrer" className="break-all text-brand hover:underline">
+            {url.replace(/^https?:\/\//, "")}
+          </a>
+        </span>
+      ))}
     </div>
   );
 }

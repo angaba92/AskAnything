@@ -76,6 +76,93 @@ function log(level: "info" | "warn" | "error", msg: string, extra?: any) {
   else console.info(line, extra ?? "");
 }
 
+/** Página de error HTML (gateway/proxy) en lugar de la respuesta en texto del KA. */
+export function isKaErrorPage(text: string): boolean {
+  return /^\s*(?:<!doctype html|<html[\s>])/i.test(text ?? "") ||
+    /<title>\s*\d{3}\s+[^<]*<\/title>/i.test((text ?? "").slice(0, 500));
+}
+
+/** Token que el KA devuelve (según su system prompt) cuando no puede responder. */
+export const KA_NO_ANSWER = "NO_ANSWER";
+
+export function isKaNoAnswer(text: string): boolean {
+  const value = text ?? "";
+  if (/^\s*[`*_]*NO_ANSWER[`*_.]*\s*$/.test(value)) return true;
+  // Loopio frame: BEGIN_CLIENT_ANSWER NO_ANSWER END_CLIENT_ANSWER (with research
+  // narration before it and CONFIDENCE_REVIEW after it).
+  const frame = value.match(/BEGIN_CLIENT_ANSWER\s*([\s\S]*?)\s*END_CLIENT_ANSWER/i);
+  return Boolean(frame && /^[`*_]*NO_ANSWER[`*_.]*$/.test(frame[1].trim()));
+}
+
+const SOURCE_LINE = /^\s*(?:[-•*]\s*)?(?:\*\*)?Sources?(?:\*\*)?\s*:\s*(.+)$/i;
+
+/** Divide "[T](U), T2 (U2), U3" en entradas {title, uri}. */
+function splitInlineSources(list: string): KaSource[] {
+  const out: KaSource[] = [];
+  const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|([^,;()[\]]*?)\s*\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s,;)]+)/g;
+  for (const m of list.matchAll(re)) {
+    const uri = (m[2] ?? m[4] ?? m[5] ?? "").replace(/[.,;]+$/, "");
+    if (!uri) continue;
+    const title = (m[1] ?? m[3] ?? "").replace(/^[\s,;]+|[\s,;]+$/g, "").trim();
+    out.push(title ? { title, uri } : { uri });
+  }
+  return out;
+}
+
+/** Líneas de metadatos que pueden seguir a la frase de fuentes (Loopio/confianza). */
+const TRAILING_METADATA =
+  /^\s*(?:[*_`]*)?(?:END_CLIENT_ANSWER|BEGIN_CLIENT_ANSWER|CONFIDENCE[\s_-]*REVIEW\b|_?confidence\s*:)/i;
+
+/**
+ * Localiza el bloque de líneas "Source(s): …" (con URL) que cierra la respuesta,
+ * aunque vaya seguido de marcadores como END_CLIENT_ANSWER o CONFIDENCE_REVIEW.
+ */
+function locateSourceLines(text: string): { lines: string[]; first: number; last: number; sources: KaSource[] } {
+  const lines = (text ?? "").replace(/\r\n/g, "\n").split("\n");
+  let end = lines.length - 1;
+  while (end >= 0 && (!lines[end].trim() || TRAILING_METADATA.test(lines[end]))) end--;
+  const sources: KaSource[] = [];
+  let first = end + 1;
+  for (let i = end; i >= 0; i--) {
+    const m = lines[i].match(SOURCE_LINE);
+    if (!m || !/https?:\/\//.test(m[1])) break;
+    sources.unshift(...splitInlineSources(m[1]));
+    first = i;
+  }
+  const seen = new Set<string>();
+  return {
+    lines,
+    first,
+    last: end,
+    sources: sources.filter((s) => (s.uri && !seen.has(s.uri) ? (seen.add(s.uri), true) : false)),
+  };
+}
+
+function trailingSourceLines(text: string): { body: string; sources: KaSource[] } {
+  const found = locateSourceLines(text);
+  return { body: found.lines.slice(0, found.first).join("\n").trimEnd(), sources: found.sources };
+}
+
+/**
+ * Adaptador de compatibilidad. El KA cambió su system prompt: ya no emite el
+ * bloque "## Sources" sino una frase final "Source: [Title](URL), [T2](U2)" (o
+ * "Source: Title (URL)"). La reescribimos, en su sitio, a la línea canónica de
+ * AskAnything "Sources: URL1; URL2", la misma que ya producían los demás caminos
+ * y que espera la normalización/exportación. Los marcadores posteriores
+ * (END_CLIENT_ANSWER, CONFIDENCE_REVIEW) se conservan. El bloque "## Sources"
+ * antiguo se deja intacto.
+ */
+export function normalizeKaSourceFormat(text: string): string {
+  const raw = (text ?? "").replace(/\r\n/g, "\n");
+  if (/^\s*#{1,6}\s*Sources?\s*$/im.test(raw)) return raw;
+  const found = locateSourceLines(raw);
+  if (found.sources.length === 0) return raw;
+  const before = found.lines.slice(0, found.first).join("\n").trimEnd();
+  const after = found.lines.slice(found.last + 1).join("\n").replace(/^\n+/, "");
+  const line = `Sources: ${found.sources.map((s) => s.uri).join("; ")}`;
+  return [before, line, after].filter((part) => part.trim()).join("\n\n");
+}
+
 /**
  * Parsea el bloque "## Sources" del markdown del KA. Cada línea tiene la forma:
  *   - [Page Title](https://url) — ≤12-word reason
@@ -85,7 +172,8 @@ export function parseKaSources(markdown: string): KaSource[] {
   const out: KaSource[] = [];
   const m = markdown.match(/##\s*Sources\s*\n([\s\S]*?)(?:\n##\s|\s*$)/i);
   const block = m ? m[1] : "";
-  if (!block.trim()) return out;
+  // Formato nuevo: frase final "Source: [Title](URL), …".
+  if (!block.trim()) return trailingSourceLines(markdown).sources;
   for (const raw of block.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
@@ -143,12 +231,16 @@ export async function kaChat(
       }
 
       // La respuesta es texto plano en streaming: res.text() acumula el total.
-      const text = (await res.text()).trim();
+      const original = (await res.text()).trim();
+      if (isKaErrorPage(original)) {
+        throw new KaError("Knowledge Assistant returned an HTML error page instead of an answer.", 502);
+      }
+      const text = normalizeKaSourceFormat(original);
       log(
         "info",
         `ok via ${host} in ${Date.now() - started}ms (${text.length} chars)`,
       );
-      return { text, sources: parseKaSources(text) };
+      return { text, sources: parseKaSources(original) };
     } catch (err) {
       const e = err as Error;
       if (e instanceof KaError) {

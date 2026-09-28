@@ -111,6 +111,18 @@ export function kaStyleInstruction(mode: AnswerMode): string | null {
  * Construye el `content` del mensaje de usuario para el KA: contexto opcional de
  * empresa/industria + la pregunta + la instrucción de estilo del modo.
  */
+/** Toda certificación, porcentaje o SLA debe ir respaldado por una referencia. */
+export const CLAIM_REFERENCE_INSTRUCTION =
+  "REFERENCES FOR VERIFIABLE CLAIMS: every certification or compliance standard (e.g. ISO 27001, SOC 2, PCI DSS, GDPR), percentage, SLA, uptime, availability, or latency figure you state must be backed by a public customer-facing reference. Include the URL of that reference in the final Sources line. Only use URLs returned by your tools.";
+
+/** El Batch nunca acepta NO_ANSWER ni respuestas vacías. */
+export const BEST_ANSWER_INSTRUCTION =
+  "ALWAYS ANSWER: never return NO_ANSWER, an empty answer or a refusal. If exact figures or a named integration are undocumented, answer at the strongest supported level: relevant DY capabilities, mechanism, factors and typical implementation. Never invent figures; put missing specifics only in CONFIDENCE_REVIEW.";
+
+/** Segundo intento cuando el primero no produjo una respuesta utilizable. */
+export const RECOVERY_INSTRUCTION =
+  "RECOVERY: the previous attempt returned no usable answer. Now return a complete substantive answer from the closest supported DY capabilities (APIs, SDKs, feeds, architecture, settings, best practices). Do not say information is missing inside the answer.";
+
 export function buildKaUserContent(
   question: string,
   opts: {
@@ -118,6 +130,7 @@ export function buildKaUserContent(
     context?: string;
     confidenceReview?: boolean;
     customPrompt?: string;
+    recovery?: boolean;
   } = {
     mode: "detailed",
   }
@@ -151,7 +164,18 @@ export function buildKaUserContent(
     ? "\n\nFINAL OUTPUT CHECK: Return the customer answer directly, without an introduction about writing it. Include the opening, themed bullet sections and a supported practical example. A one-sentence product description is NOT a completed Loopio response. Cover supported aspects even when an exact figure is unknown. Put only the missing specifics in the final CONFIDENCE_REVIEW line."
     : "";
   const boundary = opts.mode === "loopio" ? `\n\n${CLIENT_ANSWER_FRAME_INSTRUCTION}` : "";
-  const content = `Question:\n${q}${context}${style}\n\n${CLIENT_FACING_RFP_POLICY}${confidence}${outputContract}${boundary}`;
+  const recovery = opts.recovery ? `\n\n${RECOVERY_INSTRUCTION}` : "";
+  const build = (claims: boolean, best: boolean) =>
+    `Question:\n${q}${context}${style}\n\n${CLIENT_FACING_RFP_POLICY}` +
+    (claims ? `\n\n${CLAIM_REFERENCE_INSTRUCTION}` : "") +
+    (best ? `\n\n${BEST_ANSWER_INSTRUCTION}` : "") +
+    `${recovery}${confidence}${outputContract}${boundary}`;
+  // KA admite 8000 caracteres. Las guías opcionales ceden espacio a la pregunta
+  // y al contexto: primero la de referencias (el servidor añade las oficiales
+  // igualmente) y después la de "responder siempre" (la recuperación la cubre).
+  let content = build(true, true);
+  if (content.length > 8000) content = build(false, true);
+  if (content.length > 8000) content = build(false, false);
   if (content.length > 8000) {
     throw new Error(`The full Knowledge Assistant prompt is ${content.length} characters; its limit is 8000. Shorten the question or supporting context before retrying.`);
   }

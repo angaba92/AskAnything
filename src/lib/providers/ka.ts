@@ -7,7 +7,7 @@
  * la salida sea coherente con el resto de la aplicación.
  */
 
-import { kaChat, parseKaSources } from "../kaClient";
+import { isKaErrorPage, isKaNoAnswer, KaError, kaChat, normalizeKaSourceFormat, parseKaSources } from "../kaClient";
 import { findCuratedRfpHint } from "../curatedRfpKnowledge";
 import {
   buildKaUserContent,
@@ -24,16 +24,34 @@ import {
   stripNonClientFacingSentences,
 } from "../promptMapping";
 import { resolveMode, plainifyAnswer, enforceBullets, formatLoopioSections } from "../promptTemplate";
-import { extractClientAnswer, hasSubstantiveAnswer, loopioFormatIssues, separateClientFacingResponse } from "../responsePolicy";
+import { appendReferences, checkGrounding, extractClientAnswer, hasSubstantiveAnswer, loopioFormatIssues, separateClientFacingResponse } from "../responsePolicy";
 import type { GenerateOpts, ProviderAnswer } from "./types";
 
 export function normalizeBridgedKaResponse(
-  rawText: string,
+  bridgedText: string,
   opts: GenerateOpts,
 ): ProviderAnswer {
+  // La extensión devuelve el texto crudo del KA: aplicamos el mismo adaptador de
+  // formato de fuentes que kaChat para que ambos caminos sean idénticos.
+  if (isKaErrorPage(bridgedText)) {
+    throw new KaError("Knowledge Assistant returned an HTML error page instead of an answer.", 502);
+  }
+  const rawText = normalizeKaSourceFormat(bridgedText);
+  if (isKaNoAnswer(rawText)) {
+    const why = extractConfidenceReview(rawText).reason;
+    return {
+      answer: "",
+      sources: [],
+      sourcesText: "",
+      expert: "knowledge_assistant",
+      threadId: "",
+      reviewRequired: true,
+      reviewReason: `NO_ANSWER: the Knowledge Assistant's sources do not support a confident answer. Add authoritative notes and use Redo.${why ? `\n\n${why}` : ""}`,
+    };
+  }
   const mode = resolveMode(opts);
   const isCustomMode = mode === "custom";
-  const sources = parseKaSources(rawText).filter(
+  const sources = parseKaSources(bridgedText).filter(
     (source) => !isInternalSourceUrl(source.uri ?? ""),
   );
   const confidence = extractConfidenceReview(rawText);
@@ -65,9 +83,15 @@ export function normalizeBridgedKaResponse(
       ...extractSourceUrls(rawText),
     ]),
   ).filter((url) => !isInternalSourceUrl(url));
-  const sourcesText = urls.join("; ");
+  let sourcesText = urls.join("; ");
   if (urls.length > 0 && hasSubstantiveAnswer(answer) && !/https?:\/\//.test(answer)) {
     answer = `${answer}\n\nSources: ${sourcesText}`;
+  }
+  const grounding = checkGrounding(answer, urls);
+  if (!isCustomMode && grounding.fallbackReferences.length) {
+    answer = appendReferences(answer, grounding.fallbackReferences);
+    urls.push(...grounding.fallbackReferences);
+    sourcesText = urls.join("; ");
   }
   const noteNeedsReview = Boolean(note.note) && !/^(?:high|confident|full)(?:\b|$)/i.test(note.note);
   const formatIssues = mode === "loopio" ? loopioFormatIssues(answer) : [];
@@ -80,6 +104,7 @@ export function normalizeBridgedKaResponse(
     isClarificationRequest(body) ? "The response asks for clarification; review the interpretation." : "",
     formatIssues.length ? `Incomplete Loopio format: missing ${formatIssues.join("; ")}. The available answer is preserved, not padded with invented content.` : "",
     frame.incomplete ? "The client-answer boundary was incomplete; review for a truncated response." : "",
+    ...grounding.reviewReasons,
   ].filter(Boolean))];
 
   return {
@@ -100,7 +125,7 @@ export async function kaGenerate(opts: GenerateOpts): Promise<ProviderAnswer> {
   // No curated override may discard owner-provided guidance, and no rewrite is
   // generated behind the batch scheduler's back.
   if (opts.confidenceReview || mode === "loopio") {
-    const content = buildKaUserContent(opts.question, { ...opts, mode });
+    const content = buildKaUserContent(opts.question, { ...opts, mode, recovery: opts.recovery });
     const result = await kaChat([{ role: "user", content }], {
       retries: 0,
       timeoutMs: 180000,
@@ -126,6 +151,17 @@ export async function kaGenerate(opts: GenerateOpts): Promise<ProviderAnswer> {
   let res = curatedForMode
     ? { text: curatedForMode.safeAnswer, sources: curatedForMode.sources }
     : await kaChat([{ role: "user", content }]);
+  if (isKaNoAnswer(res.text)) {
+    return {
+      answer: "",
+      sources: [],
+      sourcesText: "",
+      expert: "knowledge_assistant",
+      threadId: "",
+      reviewRequired: true,
+      reviewReason: "The Knowledge Assistant returned NO_ANSWER: its sources do not support a confident answer.",
+    };
+  }
   let reviewRequired = false;
   let reviewReason = "";
   let clarificationSeen = false;
@@ -280,9 +316,20 @@ ${originalDraft}`;
     answer = answer ? `${answer}\n\nSources: ${sourcesText}` : `Sources: ${sourcesText}`;
   }
 
+  const grounding = checkGrounding(answer, urls);
+  if (!isCustomMode && grounding.fallbackReferences.length) {
+    answer = appendReferences(answer, grounding.fallbackReferences);
+    urls.push(...grounding.fallbackReferences);
+  }
+  const finalSourcesText = urls.join("; ");
+  if (grounding.reviewReasons.length) {
+    reviewRequired = true;
+    reviewReason = [reviewReason, ...grounding.reviewReasons].filter(Boolean).join("\n\n");
+  }
+
   return {
     answer,
-    sourcesText,
+    sourcesText: finalSourcesText,
     sources: res.sources,
     expert: "knowledge_assistant",
     threadId: "",

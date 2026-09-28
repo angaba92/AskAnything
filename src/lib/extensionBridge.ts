@@ -161,6 +161,7 @@ export async function askKaViaExtension(
     context?: string;
     confidenceReview?: boolean;
     customPrompt?: string;
+    recovery?: boolean;
     signal?: AbortSignal;
     onBridgeSelected?: (connection: BridgeConnection) => void;
     onRequestStarted?: (ticket: number) => void;

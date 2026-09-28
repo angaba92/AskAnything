@@ -20,6 +20,12 @@ export const CLIENT_FACING_RFP_POLICY = `CLIENT-FACING RFP RULES (mandatory):
 - You may fully use the knowledge found in internal sources (Guru, Confluence, internal wikis) to build the answer, but NEVER cite, name, or link them. Only cite customer-facing resources: the Dynamic Yield Knowledge Base (support.dynamicyield.com) and the developer documentation. If the only supporting material is internal, still give the full substantive answer and simply omit the source line.
 - Preserve the requested answer format, but these client-facing and factual-safety rules take priority.`;
 
+// Research-process narration: "The searches have not returned…", "My searches did
+// not return…", "No results were found…", "The available results did not surface…".
+const SEARCH_PROCESS =
+  /\b(?:the|my|our)\s+(?:(?:available|current|previous|initial)\s+)?(?:searches|search(?:es)? results?|results|queries|lookups?)\s+(?:have|has|had|do|does|did)\s+not\s+(?:return|returned|surface|surfaced|yield|yielded|find|found|provide|provided|include|included|reveal|revealed|show|shown|turn(?:ed)? up)\b/i;
+const NO_RESULTS = /\bno (?:relevant |specific )?(?:results|matches|hits) (?:were|was) (?:found|returned)\b/i;
+
 const NON_CLIENT_FACING_PATTERNS: RegExp[] = [
   /\bbased on (?:my|the|our) (?:search|review|available (?:knowledge|information|sources?))/i,
   /\b(?:i|we) (?:(?:was|were|am|are)\s+)?unable to (?:locate|find|identify|access)/i,
@@ -58,6 +64,8 @@ const NON_CLIENT_FACING_PATTERNS: RegExp[] = [
   /\binternal (?:troubleshooting|guidance|sources?|references?)\b/i,
   /^\s*(?:i|we) found (?:information|references?|documentation|evidence)\b/i,
   /^\s*(?:the )?documentation (?:references|describes|mentions)\b/i,
+  SEARCH_PROCESS,
+  NO_RESULTS,
 ];
 
 // Recognize a research-status statement by its subject/action/object, not by
@@ -251,14 +259,14 @@ export function stripNonClientFacingSentences(text: string): string {
 }
 
 const DOCUMENTATION_GAP =
-  /\bnot\s+(?:(?:publicly|explicitly|fully|comprehensively|currently)\s+)?(?:documented|described|disclosed|published|detailed|quantified|specified|verified|confirmed|substantiated|mentioned|referenced)\b|\b(?:documentation|sources?|information)\b[^.!?\n]*\b(?:does not|do not|cannot|can't|lack|lacks|missing|unavailable)\b|\b(?:metrics?|figures?|benchmarks?|specifications?)\b[^.!?\n]*\bnot available\b/i;
+  /\bnot\s+(?:(?:publicly|explicitly|fully|comprehensively|currently)\s+)?(?:documented|described|disclosed|published|detailed|quantified|specified|verified|confirmed|substantiated|mentioned|referenced)\b|\b(?:documentation|sources?|information)\b[^.!?\n]*\b(?:does not|do not|cannot|can't|lack|lacks|missing|unavailable)\b|\b(?:metrics?|figures?|benchmarks?|specifications?)\b[^.!?\n]*\bnot available\b|\bnot (?:available|found|covered|included) in (?:our|the) (?:current |public |available )?(?:documentation|sources?|knowledge base|materials?)\b/i;
 const SOURCE_COMMENTARY =
   /^(?:however[, ]+)?(?:the\s+)?(?:(?:available|public|published|accessible|provided|developer|technical|internal|product)\s+)*(documentation|sources?|resources?|materials?|references?|evidence|search results?|knowledge base)\s+(covers?|describes?|mentions?|references?|includes?|contains?|provides?|details?|does|do|is|are|lacks?|omits?|focus(?:es|ed)?|emphasi[sz]es?|discuss(?:es)?|address(?:es)?|outlines?|explains?|highlights?|indicates?|suggests?|shows?|states?|notes?|confirms?|offers?|lists?)\b/i;
 const NAMED_SOURCE_COMMENTARY =
   /^(?:the\s+)?(?:[\w./'-]+\s+){0,6}(?:guide|documentation|article|sources?|references?)\s+(?:\w+ly\s+)*(?:mentions?|describes?|discuss(?:es)?|focus(?:es)?|covers?|states?|notes?|indicates?|shows?|provides?|does|do)\b/i;
 const MISSING_SOURCE_EVIDENCE = /\bno\s+(?:evidence|mention)\b[^.!?\n]*\b(?:sources?|documentation|knowledge base)\b/i;
 const INTERNAL_REFERRAL =
-  /\b(?:contact|consult|reach out to|work(?:ing)? with|speak (?:to|with))\b[^.!?\n]*\b(?:account (?:representative|team|manager)|technical (?:support|consultation)|(?:sales|support|legal|implementation|product) team)\b|\b(?:account representative|sales team|support team|technical consultation)\b[^.!?\n]*\b(?:provide|available|confirm|details|specifications)\b/i;
+  /\b(?:contact(?:ing)?|consult(?:ing)?|reach(?:ing)? out to|work(?:ing)? with|speak(?:ing)? (?:to|with))\b[^.!?\n]*\b(?:account (?:representative|team|manager)|technical (?:support|consultation)|(?:sales|support|legal|implementation|product) team)\b|\b(?:account representative|sales team|support team|technical consultation)\b[^.!?\n]*\b(?:provide|available|confirm|details|specifications)\b/i;
 
 function editorialSentence(text: string): boolean {
   const value = text.replace(/^[\s•*#_`+-]+/, "").trim();
@@ -267,7 +275,7 @@ function editorialSentence(text: string): boolean {
     !(/^(?:resources?|materials?)$/i.test(source[1]) && /^(?:is|are)$/i.test(source[2]));
   return ASSISTANT_VOICE.test(value) || ANSWER_ANNOUNCEMENT.test(value) || ANSWER_PREPARATION.test(value) || RESEARCH_STATUS.test(value) ||
     DOCUMENTATION_GAP.test(value) || MISSING_SOURCE_EVIDENCE.test(value) || sourceCommentary || NAMED_SOURCE_COMMENTARY.test(value) ||
-    INTERNAL_REFERRAL.test(value) || isClarificationRequest(value) ||
+    INTERNAL_REFERRAL.test(value) || isClarificationRequest(value) || SEARCH_PROCESS.test(value) || NO_RESULTS.test(value) ||
     (/^(?:i|we|based on|the only)\b/i.test(value) && hasNonClientFacingLanguage(value));
 }
 
@@ -455,4 +463,111 @@ export function hasSubstantiveAnswer(text: string): boolean {
         words.every((word) => /^[A-Z]/.test(word))) return false;
     return words.length >= 2;
   });
+}
+
+/** Dominios considerados documentación oficial y citable para clientes. */
+const OFFICIAL_SOURCE_HOSTS = [
+  /(?:^|\.)dy\.dev$/i,
+  /(?:^|\.)dynamicyield\.com$/i,
+  /(?:^|\.)mastercard\.com$/i,
+];
+
+export function isOfficialSourceUrl(url: string): boolean {
+  try {
+    return OFFICIAL_SOURCE_HOSTS.some((re) => re.test(new URL(url).hostname));
+  } catch {
+    return false;
+  }
+}
+
+/** Afirmaciones de alto riesgo en un RFP: compromisos verificables por el cliente. */
+const HIGH_RISK_CLAIMS: Array<[string, RegExp]> = [
+  ["certifications/compliance", /\b(?:ISO\s?\/?\s?(?:IEC\s?)?\d{4,5}|SOC\s?[123]|PCI(?:[\s-]?DSS)?|HIPAA|GDPR|CCPA|FedRAMP|TISAX|C5|CSA\s?STAR)\b/i],
+  ["percentages", /\b\d+(?:[.,]\d+)?\s?%/],
+  ["SLA/uptime/latency figures", /\b(?:uptime|availability|SLA|latency|RTO|RPO|response time)\b[^.\n]{0,60}\b\d/i],
+  ["dates or version numbers", /\b(?:19|20)\d{2}\b|\bv?\d+\.\d+(?:\.\d+)?\b/],
+  ["guarantees", /\b(?:guarantee[sd]?|ensures? (?:100|zero)|never (?:lose|fails?))\b/i],
+];
+
+/**
+ * Páginas oficiales públicas (verificadas: redirigen a mastercard.com) que
+ * respaldan afirmaciones de alto riesgo cuando el KA no devuelve referencia.
+ */
+export const OFFICIAL_CLAIM_REFERENCES = {
+  security: "https://www.dynamicyield.com/security/",
+  dpa: "https://www.dynamicyield.com/dpa/",
+  sla: "https://www.dynamicyield.com/sla/",
+} as const;
+
+const PRIVACY_REGULATION = /\b(?:GDPR|CCPA|UK GDPR|data processing (?:addendum|agreement)|DPA|sub-?processors?)\b/i;
+const SECURITY_CERTIFICATION = /\b(?:ISO\s?\/?\s?(?:IEC\s?)?\d{4,5}|SOC\s?[123]|PCI(?:[\s-]?DSS)?|HIPAA|FedRAMP|TISAX|C5|CSA\s?STAR|penetration test(?:s|ing)?|encryption at rest)\b/i;
+const SERVICE_LEVEL =
+  /\b(?:SLAs?|service[- ]level|uptime|RTO|RPO)\b|\b\d+(?:[.,]\d+)?\s?%\s*(?:availability|uptime)\b|\bavailability (?:target|commitment|guarantee)s?\b/i;
+
+export interface GroundingCheck {
+  sourced: boolean;
+  officialUrls: string[];
+  unofficialUrls: string[];
+  highRiskClaims: string[];
+  /** Referencias oficiales a añadir porque el KA no respaldó la afirmación. */
+  fallbackReferences: string[];
+  reviewReasons: string[];
+}
+
+/**
+ * Mitigación del riesgo factual sin inundar Needs Review:
+ * - Sin fuente → solo aviso visual en la UI (no va a revisión).
+ * - Certificaciones / % / SLAs sin referencia que las respalde → se añaden las
+ *   páginas oficiales de DY (Security, DPA, SLA) a la línea de referencias.
+ * - URL citada fuera de la documentación oficial → revisión.
+ * Nunca modifica el texto de la respuesta.
+ */
+export function checkGrounding(answer: string, urls: string[]): GroundingCheck {
+  const body = (answer ?? "")
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:[-•*]\s*)?(?:sources?|references?)\s*:/i.test(line))
+    .join("\n")
+    .replace(/https?:\/\/\S+/g, "");
+  const unique = Array.from(new Set(urls.filter(Boolean)));
+  const officialUrls = unique.filter(isOfficialSourceUrl);
+  const unofficialUrls = unique.filter((url) => !isOfficialSourceUrl(url));
+  const highRiskClaims = HIGH_RISK_CLAIMS.filter(([, re]) => re.test(body)).map(([label]) => label);
+  const sourced = officialUrls.length > 0;
+  const reviewReasons: string[] = [];
+  const fallbackReferences: string[] = [];
+  if (!hasSubstantiveAnswer(answer)) {
+    return { sourced, officialUrls, unofficialUrls, highRiskClaims, fallbackReferences, reviewReasons };
+  }
+  const has = (url: string) => unique.some((u) => u.replace(/\/+$/, "") === url.replace(/\/+$/, ""));
+  // Una URL de dy.dev o del Help Center no respalda una certificación ni un SLA:
+  // solo omitimos el fallback si ya se cita la propia página oficial.
+  if (SECURITY_CERTIFICATION.test(body) && !has(OFFICIAL_CLAIM_REFERENCES.security)) {
+    fallbackReferences.push(OFFICIAL_CLAIM_REFERENCES.security);
+  }
+  if (PRIVACY_REGULATION.test(body) && !has(OFFICIAL_CLAIM_REFERENCES.dpa)) {
+    fallbackReferences.push(OFFICIAL_CLAIM_REFERENCES.dpa);
+  }
+  if (SERVICE_LEVEL.test(body) && !has(OFFICIAL_CLAIM_REFERENCES.sla)) {
+    fallbackReferences.push(OFFICIAL_CLAIM_REFERENCES.sla);
+  }
+  if (unofficialUrls.length) {
+    reviewReasons.push(
+      `Cited source outside official Dynamic Yield documentation: ${unofficialUrls.join(", ")}. Confirm it is authoritative and customer-shareable.`,
+    );
+  }
+  return { sourced, officialUrls, unofficialUrls, highRiskClaims, fallbackReferences, reviewReasons };
+}
+
+/** Añade referencias a la línea final "Sources:" (o la crea) sin tocar el cuerpo. */
+export function appendReferences(answer: string, refs: string[]): string {
+  if (!refs.length) return answer;
+  const lines = (answer ?? "").replace(/\s+$/, "").split("\n");
+  const last = lines.length - 1;
+  if (last >= 0 && /^\s*sources?\s*:/i.test(lines[last])) {
+    const existing: string[] = lines[last].match(/https?:\/\/[^\s;,)]+/g) ?? [];
+    const merged = [...existing, ...refs.filter((r) => !existing.includes(r))];
+    lines[last] = `Sources: ${merged.join("; ")}`;
+    return lines.join("\n");
+  }
+  return `${lines.join("\n")}\n\nSources: ${refs.join("; ")}`;
 }

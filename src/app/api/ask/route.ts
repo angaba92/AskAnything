@@ -28,7 +28,7 @@ export const dynamic = "force-dynamic";
  * plantilla de dyClient). structured=false/omitido → respuesta simple y concisa.
  */
 export async function POST(req: NextRequest) {
-  const { question, context, structured, mode, threadId, sectionId, backend, confidenceReview, customPrompt, localKaResponse } = (await req.json()) as {
+  const { question, context, structured, mode, threadId, sectionId, backend, confidenceReview, customPrompt, localKaResponse, recovery } = (await req.json()) as {
     question: string;
     context?: string;
     structured?: boolean;
@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
     confidenceReview?: boolean;
     customPrompt?: string;
     localKaResponse?: string;
+    recovery?: boolean;
   };
 
   if (!question?.trim()) {
@@ -159,15 +160,19 @@ export async function POST(req: NextRequest) {
         context,
         confidenceReview,
         customPrompt,
+        recovery: Boolean(recovery),
         signal: req.signal,
       };
       const r = typeof localKaResponse === "string"
         ? normalizeBridgedKaResponse(localKaResponse, generateOpts)
         : await generateStateless("ka", generateOpts);
       if (!hasSubstantiveAnswer(r.answer)) {
+        const noAnswer = /^NO_ANSWER:/.test(r.reviewReason ?? "");
         return NextResponse.json({
-          error: "Knowledge Assistant returned only sources, metadata, or no usable answer. Add notes and use Redo, or retry this row manually.",
-          code: "NO_SUBSTANTIVE_ANSWER",
+          error: noAnswer
+            ? "The Knowledge Assistant found no supported answer (NO_ANSWER). Add authoritative notes and use Redo."
+            : "Knowledge Assistant returned only sources, metadata, or no usable answer. Add notes and use Redo, or retry this row manually.",
+          code: noAnswer ? "NO_ANSWER" : "NO_SUBSTANTIVE_ANSWER",
           reviewReason: r.reviewReason || "No substantive answer was returned.",
         }, { status: 422 });
       }

@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
   type ReactNode,
@@ -15,6 +16,14 @@ import * as XLSX from "xlsx";
 import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
 import { BatchRequestError, readBatchAnswer } from "@/lib/batchResponse";
 import { bridgeHealth } from "@/lib/bridgeHealth";
+import {
+  BATCH_SNAPSHOT_SCHEMA,
+  clearBatchSnapshot,
+  loadBatchSnapshot,
+  restoreRows,
+  resumeStartRow,
+  saveBatchSnapshot,
+} from "@/lib/batchPersistence";
 import {
   askKaViaExtension,
   isExtensionBridgeAvailable,
@@ -110,6 +119,11 @@ interface BatchContextValue {
   testingBridge: boolean;
   logs: BatchLogEntry[];
   clearLogs: () => void;
+  /** Momento del guardado restaurado tras un reload (null si no hubo). */
+  restoredAt: number | null;
+  restoredInterrupted: boolean;
+  dismissRestored: () => void;
+  discardBatch: () => void;
 }
 
 const QUESTION_KEYS = [
@@ -190,6 +204,9 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const [bridgeTest, setBridgeTest] = useState<string | null>(null);
   const [testingBridge, setTestingBridge] = useState(false);
   const [logs, setLogs] = useState<BatchLogEntry[]>([]);
+  const [restoredAt, setRestoredAt] = useState<number | null>(null);
+  const [restoredInterrupted, setRestoredInterrupted] = useState(false);
+  const hydratedRef = useRef(false);
 
   /** Añade una entrada al log, acotado para no crecer sin límite. */
   const log = useCallback(
@@ -246,6 +263,14 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   const headerRowRef = useRef(1);
   const startRowRef = useRef(1);
   const customPromptRef = useRef("");
+  const fileNameRef = useRef("");
+  const latestRef = useRef({
+    questionCol: "",
+    newAnswerColumnName: "",
+    newReviewColumnName: "",
+    customPromptFileName: "",
+    logs: [] as BatchLogEntry[],
+  });
 
   rowsRef.current = rows;
   contextRef.current = context;
@@ -256,6 +281,151 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   headerRowRef.current = headerRow;
   startRowRef.current = startRow;
   customPromptRef.current = customPrompt;
+  fileNameRef.current = fileName;
+  latestRef.current = { questionCol, newAnswerColumnName, newReviewColumnName, customPromptFileName, logs };
+
+  // --- Persistencia local (IndexedDB) ---
+  // Restauramos una sola vez al montar. Hasta entonces no guardamos, para no
+  // sobrescribir el snapshot con el estado vacío inicial.
+  useEffect(() => {
+    let cancelled = false;
+    loadBatchSnapshot()
+      .then((snap) => {
+        if (cancelled || !snap || busy()) return;
+        restoreSnapshot(snap);
+      })
+      .catch((err) => console.warn("[batch] could not restore saved batch", err))
+      .finally(() => {
+        hydratedRef.current = true;
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    const id = setTimeout(() => persistNow(), 400);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, context, mode, fileName, selectedSheet, headerRow, questionCol, answerCol, reviewCol,
+      newAnswerColumnName, newReviewColumnName, customPrompt, customPromptFileName, startRow, logs,
+      running, redoingRow]);
+
+  useEffect(() => {
+    const onHide = () => {
+      if (hydratedRef.current) persistNow();
+    };
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      onHide();
+      if (busy()) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function persistNow() {
+    if (!fileNameRef.current && rowsRef.current.length === 0) {
+      clearBatchSnapshot().catch(() => undefined);
+      return;
+    }
+    const latest = latestRef.current;
+    saveBatchSnapshot({
+      schema: BATCH_SNAPSHOT_SCHEMA,
+      savedAt: Date.now(),
+      fileName: fileNameRef.current,
+      fileBytes: originalWorkbookBytesRef.current,
+      selectedSheet: selectedSheetRef.current,
+      headerRow: headerRowRef.current,
+      questionCol: latest.questionCol,
+      answerCol: answerColRef.current,
+      reviewCol: reviewColRef.current,
+      newAnswerColumnName: latest.newAnswerColumnName,
+      newReviewColumnName: latest.newReviewColumnName,
+      context: contextRef.current,
+      mode: modeRef.current,
+      customPrompt: customPromptRef.current,
+      customPromptFileName: latest.customPromptFileName,
+      startRow: startRowRef.current,
+      rows: rowsRef.current,
+      logs: latest.logs,
+      interrupted: busy(),
+    }).catch((err) => console.warn("[batch] could not save batch", err));
+  }
+
+  function restoreSnapshot(snap: NonNullable<Awaited<ReturnType<typeof loadBatchSnapshot>>>) {
+    const restoredRows = restoreRows(snap.rows) as BatchRow[];
+    if (snap.fileBytes) {
+      const wb = XLSX.read(snap.fileBytes, { type: "array" });
+      workbookRef.current = wb;
+      originalWorkbookBytesRef.current = snap.fileBytes;
+      setSheetNames(wb.SheetNames);
+      const sheet = wb.Sheets[snap.selectedSheet] ? snap.selectedSheet : wb.SheetNames[0];
+      configureSheet(sheet, snap.headerRow);
+      setQuestionColState(snap.questionCol);
+      setAnswerColState(snap.answerCol);
+      setReviewColState(snap.reviewCol);
+      answerColRef.current = snap.answerCol;
+      reviewColRef.current = snap.reviewCol;
+    }
+    setFileName(snap.fileName);
+    setNewAnswerColumnName(snap.newAnswerColumnName || DEFAULT_ANSWER_COLUMN);
+    setNewReviewColumnName(snap.newReviewColumnName || DEFAULT_REVIEW_COLUMN);
+    setContext(snap.context);
+    setMode((snap.mode as BatchMode) || "detailed");
+    setCustomPrompt(snap.customPrompt);
+    setCustomPromptFileName(snap.customPromptFileName);
+    setRows(restoredRows);
+    setStartRowState(resumeStartRow(restoredRows, snap.startRow));
+    setProgress(restoredRows.filter((r) => r.status === "done" || r.status === "skipped").length);
+    setMappingOpen(Boolean(snap.fileBytes) && restoredRows.length === 0);
+    const pending = restoredRows.filter((r) => r.status === "pending").length;
+    setLogs([
+      ...snap.logs,
+      {
+        time: Date.now(),
+        level: (snap.interrupted ? "warn" : "info") as BatchLogEntry["level"],
+        message: snap.interrupted
+          ? `Batch restored after an interruption (saved ${new Date(snap.savedAt).toLocaleString()}). The in-flight row was reset to pending; ${pending} pending. Press Run to resume.`
+          : `Batch restored from local save (${new Date(snap.savedAt).toLocaleString()}); ${pending} pending.`,
+      },
+    ].slice(-800));
+    setRestoredAt(snap.savedAt);
+    setRestoredInterrupted(snap.interrupted);
+  }
+
+  function discardBatch() {
+    if (!requireIdle()) return;
+    workbookRef.current = null;
+    originalWorkbookBytesRef.current = null;
+    rawRef.current = [];
+    setRows([]);
+    setFileName("");
+    fileNameRef.current = "";
+    setSheetNames([]);
+    setColumns([]);
+    setPreviewRows([]);
+    setSelectedSheetState("");
+    setQuestionColState("");
+    setAnswerColState("");
+    setReviewColState("");
+    setMappingOpen(false);
+    setProgress(0);
+    setStartRowState(1);
+    setError(null);
+    setRestoredAt(null);
+    setRestoredInterrupted(false);
+    clearBatchSnapshot().catch(() => undefined);
+  }
 
   function setRows(update: SetStateAction<BatchRow[]>) {
     const next = typeof update === "function" ? update(rowsRef.current) : update;
@@ -445,6 +615,8 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     }
     workbookRef.current = wb;
     originalWorkbookBytesRef.current = buffer.slice(0);
+    setRestoredAt(null);
+    setRestoredInterrupted(false);
     setSheetNames(wb.SheetNames);
     setFileName(name);
     setRows([]);
@@ -667,35 +839,48 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       const useBridge = !["localhost", "127.0.0.1"].includes(
         window.location.hostname,
       );
-      let bridged: string | undefined;
-      if (useBridge) {
-        bridged = await askKaViaExtension(row.question, {
-          mode: requestMode,
-          context: enrichedContext,
-          confidenceReview: true,
+      const generate = async (recovery: boolean) => {
+        let bridged: string | undefined;
+        if (useBridge) {
+          bridged = await askKaViaExtension(row.question, {
+            mode: requestMode,
+            context: enrichedContext,
+            confidenceReview: true,
+            recovery,
+            signal: controller.signal,
+            onBridgeSelected: logBridge,
+            onRequestStarted: (ticket) => { bridgeTicket = ticket; },
+            customPrompt: requestPrompt,
+          });
+          bridgeReturned = true;
+        }
+        const response = await fetch("/api/ask", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            question: row.question,
+            context: enrichedContext,
+            mode: requestMode,
+            backend: "ka",
+            confidenceReview: true,
+            customPrompt: requestPrompt,
+            localKaResponse: bridged,
+            recovery,
+          }),
           signal: controller.signal,
-          onBridgeSelected: logBridge,
-          onRequestStarted: (ticket) => { bridgeTicket = ticket; },
-          customPrompt: requestPrompt,
         });
-        bridgeReturned = true;
+        return readBatchAnswer(response);
+      };
+      let data;
+      try {
+        data = await generate(false);
+      } catch (err) {
+        if (!(err instanceof BatchRequestError && err.status === 422) || stopRef.current || controller.signal.aborted) throw err;
+        if (bridgeTicket !== undefined) bridgeHealth.succeed(bridgeTicket);
+        bridgeTicket = undefined;
+        log("warn", "Redo returned no usable answer; retrying once with recovery instructions.", rowIndex + 1);
+        data = await generate(true);
       }
-
-      const response = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          question: row.question,
-          context: enrichedContext,
-          mode: requestMode,
-          backend: "ka",
-          confidenceReview: true,
-          customPrompt: requestPrompt,
-          localKaResponse: bridged,
-        }),
-        signal: controller.signal,
-      });
-      const data = await readBatchAnswer(response);
       if (stopRef.current || controller.signal.aborted) {
         if (bridgeTicket !== undefined) bridgeHealth.cancel(bridgeTicket, controller.signal.reason);
         return;
@@ -930,11 +1115,12 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
       const controller = new AbortController();
       let generationReceived = false;
       let bridgeTicket: number | undefined;
-      const timeout = setTimeout(() => {
+      const armTimeout = () => setTimeout(() => {
         setError("The request exceeded 220 seconds. Batch paused; resume manually.");
         stopRef.current = true;
         controller.abort(new DOMException("The request exceeded 220 seconds.", "TimeoutError"));
       }, 220000);
+      let timeout = armTimeout();
       try {
         const rowStarted = Date.now();
         abortRef.current = controller;
@@ -943,28 +1129,29 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
         const requestContext = contextRef.current;
         const requestPrompt = requestMode === "custom" ? customPromptRef.current : undefined;
         log("info", `Asking: ${question.slice(0, 90)}`, i + 1);
-        let localKaResponse: string | undefined;
-        if (useCorporateBridge) {
-          const bridgeStarted = Date.now();
-          localKaResponse = await askKaViaExtension(question, {
-            mode: requestMode,
-            context: requestContext || undefined,
-            confidenceReview: true,
-            customPrompt: requestPrompt,
-            signal: controller.signal,
-            onBridgeSelected: logBridge,
-            onRequestStarted: (ticket) => { bridgeTicket = ticket; },
-          });
-          generationReceived = true;
-          log(
-            "info",
-            `Bridge replied in ${((Date.now() - bridgeStarted) / 1000).toFixed(1)}s (${localKaResponse.length} chars)`,
-            i + 1,
-          );
-        }
         // Sección (y por tanto hilo) de esta pregunta. Rotamos en cada intento.
         const section = BATCH_SECTIONS[rotation.current % BATCH_SECTIONS.length];
-        const askApi = async (bridgedResponse?: string) => {
+        const generate = async (recovery: boolean) => {
+          let localKaResponse: string | undefined;
+          if (useCorporateBridge) {
+            const bridgeStarted = Date.now();
+            localKaResponse = await askKaViaExtension(question, {
+              mode: requestMode,
+              context: requestContext || undefined,
+              confidenceReview: true,
+              customPrompt: requestPrompt,
+              recovery,
+              signal: controller.signal,
+              onBridgeSelected: logBridge,
+              onRequestStarted: (ticket) => { bridgeTicket = ticket; },
+            });
+            generationReceived = true;
+            log(
+              "info",
+              `Bridge replied in ${((Date.now() - bridgeStarted) / 1000).toFixed(1)}s (${localKaResponse.length} chars)`,
+              i + 1,
+            );
+          }
           const response = await fetch("/api/ask", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -977,16 +1164,31 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
               threadId: sectionThreads.current[section] ?? undefined,
               confidenceReview: true,
               customPrompt: requestPrompt,
-              localKaResponse: bridgedResponse,
+              localKaResponse,
+              recovery,
             }),
             signal: controller.signal,
           });
           return readBatchAnswer(response);
         };
 
-        // Una sola llamada por fila: KA debe dar la mejor respuesta a la primera
-        // y la normalización conserva su contenido íntegro.
-        const data = await askApi(localKaResponse);
+        // Una llamada por fila. Si KA respondió pero sin respuesta utilizable
+        // (NO_ANSWER, vacía o solo metadatos), se hace UN intento de
+        // recuperación: nunca se entrega una fila vacía sin haberlo intentado.
+        // No es un duplicado: el primer intento terminó y fue rechazado.
+        let data;
+        try {
+          data = await generate(false);
+        } catch (err) {
+          if (!(err instanceof BatchRequestError && err.status === 422) || stopRef.current || controller.signal.aborted) throw err;
+          if (bridgeTicket !== undefined) bridgeHealth.succeed(bridgeTicket);
+          bridgeTicket = undefined;
+          log("warn", `No usable answer on first attempt (${err.message.slice(0, 100)}); retrying once with recovery instructions.`, i + 1);
+          clearTimeout(timeout);
+          timeout = armTimeout();
+          data = await generate(true);
+          log("info", "Recovery attempt produced an answer.", i + 1);
+        }
         if (!String(data.answer ?? "").trim()) {
           throw new Error(
             "Knowledge Assistant returned no substantive answer.",
@@ -1415,6 +1617,10 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
     testingBridge,
     logs,
     clearLogs,
+    restoredAt,
+    restoredInterrupted,
+    dismissRestored: () => setRestoredAt(null),
+    discardBatch,
   };
 
   return (

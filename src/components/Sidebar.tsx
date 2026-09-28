@@ -44,15 +44,6 @@ export default function Sidebar({
         >
           ⬚ Bulk import (Excel / CSV)
         </Link>
-        <Link
-          href="/kb"
-          className="mt-1 flex items-center gap-1.5 text-xs font-medium text-brand hover:underline"
-        >
-          ⬚ Knowledge base (RFP)
-          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700">
-            testing
-          </span>
-        </Link>
         <div className="mt-3 flex flex-wrap gap-1">
           {["All", ...STATUSES].map((s) => (
             <button

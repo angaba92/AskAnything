@@ -45,6 +45,8 @@ export interface GenerateOpts {
   question: string;
   mode?: string;
   structured?: boolean;
+  /** Segundo intento con instrucción de recuperación (nunca respuesta vacía). */
+  recovery?: boolean;
   context?: string;
   /** Solicita una autoevaluación separada de confianza para el flujo bulk. */
   confidenceReview?: boolean;
