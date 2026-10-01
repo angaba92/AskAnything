@@ -52,18 +52,21 @@ function columnIndex(reference: string): number {
 }
 
 function replaceCell(rowXml: string, reference: string, value: string): string {
-  const cellPattern = new RegExp(`<c\\b([^>]*\\br="${reference}"[^>]*)>([\\s\\S]*?)<\\/c>|<c\\b([^>]*\\br="${reference}"[^>]*)\\/>`);
+  // Self-closing alternative first: otherwise an empty cell such as <c r="D3"/>
+  // followed by a later full cell would be matched up to that cell's </c>,
+  // deleting the neighbouring cells.
+  const cellPattern = new RegExp(`<c\\b([^>]*?\\br="${reference}"[^>]*?)\\/>|<c\\b([^>]*?\\br="${reference}"[^>]*?)>([\\s\\S]*?)<\\/c>`);
   const existing = cellPattern.exec(rowXml);
   const escaped = escapeXml(value);
   if (existing) {
-    const attrs = (existing[1] || existing[3])
+    const attrs = (existing[1] || existing[2])
       .replace(/\s+t="[^"]*"/g, "");
     const replacement = `<c${attrs} t="inlineStr"><is><t xml:space="preserve">${escaped}</t></is></c>`;
     return rowXml.slice(0, existing.index) + replacement + rowXml.slice(existing.index + existing[0].length);
   }
 
   const targetColumn = columnIndex(reference);
-  const cellTags = [...rowXml.matchAll(/<c\b[^>]*\br="([A-Z]+\d+)"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g)];
+  const cellTags = [...rowXml.matchAll(/<c\b[^>]*?\br="([A-Z]+\d+)"[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g)];
   const nearest = cellTags.reduce<{ distance: number; style?: string } | null>((best, match) => {
     const distance = Math.abs(columnIndex(match[1]) - targetColumn);
     const style = attribute(match[0], "s");
@@ -78,12 +81,21 @@ function replaceCell(rowXml: string, reference: string, value: string): string {
   return rowXml.replace("</row>", `${cell}</row>`);
 }
 
+/** Crea una fila que no existe en el XML (filas vacías no se serializan). */
+function insertRow(xml: string, rowNumber: number, reference: string, value: string): string {
+  const row = `<row r="${rowNumber}"><c r="${reference}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(value)}</t></is></c></row>`;
+  if (/<sheetData\s*\/>/.test(xml)) return xml.replace(/<sheetData\s*\/>/, `<sheetData>${row}</sheetData>`);
+  const later = [...xml.matchAll(/<row\b[^>]*\br="(\d+)"/g)].find((m) => Number(m[1]) > rowNumber);
+  if (later?.index !== undefined) return xml.slice(0, later.index) + row + xml.slice(later.index);
+  return xml.replace("</sheetData>", `${row}</sheetData>`);
+}
+
 function updateCell(xml: string, edit: XlsxCellEdit): string {
   const rowNumber = edit.row + 1;
   const reference = `${columnName(edit.column)}${rowNumber}`;
   const rowPattern = new RegExp(`<row\\b[^>]*\\br="${rowNumber}"[^>]*>[\\s\\S]*?<\\/row>`);
   const match = rowPattern.exec(xml);
-  if (!match) throw new Error(`Worksheet row ${rowNumber} is missing.`);
+  if (!match) return insertRow(xml, rowNumber, reference, edit.value);
   const replacement = replaceCell(match[0], reference, edit.value);
   return xml.slice(0, match.index) + replacement + xml.slice(match.index + match[0].length);
 }

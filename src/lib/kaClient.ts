@@ -1,3 +1,5 @@
+import { SOURCE_LABEL } from "./multilingual";
+
 /**
  * Cliente server-side para el "DY Knowledge Assistant" — la NUEVA plataforma por
  * defecto de AskAnything.
@@ -94,7 +96,7 @@ export function isKaNoAnswer(text: string): boolean {
   return Boolean(frame && /^[`*_]*NO_ANSWER[`*_.]*$/.test(frame[1].trim()));
 }
 
-const SOURCE_LINE = /^\s*(?:[-•*]\s*)?(?:\*\*)?Sources?(?:\*\*)?\s*:\s*(.+)$/i;
+const SOURCE_LINE = new RegExp(`^\\s*(?:[-•*]\\s*)?(?:\\*\\*)?${SOURCE_LABEL}(?:\\*\\*)?\\s*:\\s*(.+)$`, "iu");
 
 /** Divide "[T](U), T2 (U2), U3" en entradas {title, uri}. */
 function splitInlineSources(list: string): KaSource[] {

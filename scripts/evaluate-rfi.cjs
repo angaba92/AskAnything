@@ -16,6 +16,23 @@ require.extensions[".ts"] = (module, filename) => module._compile(
 
 const { buildKaUserContent } = require("../src/lib/promptMapping.ts");
 const { updateOriginalXlsx } = require("../src/lib/xlsxPreserve.ts");
+const { normalizeBridgedKaResponse } = require("../src/lib/providers/ka.ts");
+const { hasSubstantiveAnswer } = require("../src/lib/responsePolicy.ts");
+
+// APP_URL=inprocess runs the same normalization as /api/ask without a dev server.
+function askApp(body) {
+  if (process.env.APP_URL !== "inprocess") return curlJson(appEndpoint, body, 240);
+  try {
+    const r = normalizeBridgedKaResponse(body.localKaResponse, { question: body.question, mode: body.mode, confidenceReview: true, recovery: body.recovery });
+    if (!hasSubstantiveAnswer(r.answer)) {
+      const noAnswer = /^NO_ANSWER:/.test(r.reviewReason ?? "");
+      return { status: 422, text: JSON.stringify({ error: noAnswer ? "The Knowledge Assistant found no supported answer (NO_ANSWER)." : "No usable answer.", reviewReason: r.reviewReason }) };
+    }
+    return { status: 200, text: JSON.stringify({ ok: true, answer: r.answer, tools: r.sourcesText || "knowledge_assistant", reviewRequired: r.reviewRequired, reviewReason: r.reviewReason }) };
+  } catch (err) {
+    return { status: err.status ?? 500, text: JSON.stringify({ error: err.message }) };
+  }
+}
 
 const [input, outputDir, mode = "loopio", answerLetter = "C"] = process.argv.slice(2);
 if (!input || !outputDir) throw new Error("Usage: node scripts/evaluate-rfi.cjs INPUT.xlsx NEW_OUTPUT_DIR [mode] [answerCol]");
@@ -37,22 +54,28 @@ function curlJson(url, body, timeout) {
   const original = fs.readFileSync(input);
   const wb = XLSX.read(original, { type: "buffer" });
   const sheetName = wb.SheetNames[0];
-  const matrix = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "" });
+  const { sheetToMatrix } = require("../src/lib/sheetMatrix.ts");
+  const matrix = sheetToMatrix(wb.Sheets[sheetName]);
   const answerCol = XLSX.utils.decode_col(answerLetter);
-  const reviewCol = Math.max(...matrix.map((r) => r.length), answerCol + 1);
+  const reviewCol = process.env.REVIEW_COL ? XLSX.utils.decode_col(process.env.REVIEW_COL) : Math.max(...matrix.map((r) => r.length), answerCol + 1);
   const results = [];
   // RAW_FROM=results.json reuses saved KA responses (re-normalization only).
   const cached = process.env.RAW_FROM
     ? Object.fromEntries(JSON.parse(fs.readFileSync(process.env.RAW_FROM, "utf8")).map((e) => [e.row, e]))
     : {};
-  const edits = [{ row: 0, column: reviewCol, value: "Review" }];
+  const qColH = XLSX.utils.decode_col(process.env.QUESTION_COL || "A");
+  const headerRow = Math.max(0, matrix.findIndex((row) => String(row[qColH] ?? "").trim()));
+  const edits = [{ row: headerRow, column: reviewCol, value: "Review" }];
+  if (!String(matrix[headerRow][answerCol] ?? "").trim()) edits.push({ row: headerRow, column: answerCol, value: "Answer" });
 
-  for (let r = 1; r < matrix.length; r++) {
-    const question = String(matrix[r][0] ?? "").trim();
-    const isHeading = question && !/\n/.test(question) && !String(matrix[r][1] ?? "").trim();
+  // QUESTION_COL (letter) lets workbooks keep questions outside column A.
+  const qCol = XLSX.utils.decode_col(process.env.QUESTION_COL || "A");
+  for (let r = headerRow + 1; r < matrix.length; r++) {
+    const question = String(matrix[r][qCol] ?? "").trim();
+    const isHeading = qCol === 0 && question && !/\n/.test(question) && !String(matrix[r][1] ?? "").trim();
     if (!question || isHeading) continue;
     const started = Date.now();
-    const entry = { row: r + 1, title: question.split(/\r?\n/)[0], question, reference: String(matrix[r][1] ?? "") };
+    const entry = { row: r + 1, title: question.split(/\r?\n/)[0].slice(0, 60), question, reference: qCol === 0 ? String(matrix[r][1] ?? "") : "" };
     process.stdout.write(`row ${r + 1} ${entry.title} ... `);
     try {
       const only = process.env.ONLY_ROWS ? process.env.ONLY_ROWS.split(",").map(Number) : null;
@@ -66,7 +89,7 @@ function curlJson(url, body, timeout) {
           if (res.status === 200) break;
         }
         if (res.status !== 200) throw new Error(`KA HTTP ${res.status}`);
-        const app = curlJson(appEndpoint, { question, mode, backend: "ka", confidenceReview: true, localKaResponse: res.text, recovery }, 240);
+        const app = askApp({ question, mode, backend: "ka", confidenceReview: true, localKaResponse: res.text, recovery });
         return { raw: res.text, app, data: JSON.parse(app.text) };
       };
       if (!process.env.RAW_FROM) {
@@ -90,7 +113,7 @@ function curlJson(url, body, timeout) {
       entry.kaStatus = ka.status;
       entry.raw = ka.text;
       if (ka.status !== 200) throw new Error(`KA HTTP ${ka.status}`);
-      const app = curlJson(appEndpoint, { question, mode, backend: "ka", confidenceReview: true, localKaResponse: ka.text }, 240);
+      const app = askApp({ question, mode, backend: "ka", confidenceReview: true, localKaResponse: ka.text });
       const data = JSON.parse(app.text);
       entry.appStatus = app.status;
       entry.answer = data.answer ?? "";
@@ -112,7 +135,7 @@ function curlJson(url, body, timeout) {
     fs.writeFileSync(path.join(outputDir, "results.json"), JSON.stringify(results, null, 2));
   }
 
-  const out = await updateOriginalXlsx(original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength), sheetName, edits, [{ column: reviewCol, width: 45 }]);
+  const out = await updateOriginalXlsx(original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength), sheetName, edits, [{ column: reviewCol, width: 45 }, ...(!String(matrix[headerRow][answerCol] ?? "").trim() ? [{ column: answerCol, width: 80 }] : [])]);
   const outName = path.basename(input).replace(/\.xlsx$/i, "") + "_answered.xlsx";
   fs.writeFileSync(path.join(outputDir, outName), Buffer.from(out));
   console.log(`\nWrote ${path.join(outputDir, outName)}`);

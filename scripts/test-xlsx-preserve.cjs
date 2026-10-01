@@ -107,3 +107,61 @@ test("real complex workbook retains every package part after a cell update", asy
   fs.unlinkSync(temporary);
   assert.equal(parsed.Sheets["Lot 1"].F7.v, "Preservation test");
 });
+
+test("sheets whose used range starts at B3 keep A1-aligned rows/columns and export to the right cells", async () => {
+  const XLSX = require("xlsx");
+  const { sheetToMatrix } = require("../src/lib/sheetMatrix.ts");
+  const { updateOriginalXlsx } = require("../src/lib/xlsxPreserve.ts");
+  const ws = XLSX.utils.aoa_to_sheet([["Thema", "Frage"], ["Technik", "Snowplow?"]], { origin: "B3" });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "S");
+  const bytes = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+  const matrix = sheetToMatrix(XLSX.read(bytes, { type: "array" }).Sheets.S);
+  assert.equal(matrix[2][1], "Thema");
+  assert.equal(matrix[3][2], "Snowplow?");
+  const out = await updateOriginalXlsx(bytes, "S", [
+    { row: 2, column: 3, value: "Answer" },
+    { row: 3, column: 3, value: "Ja, über die Export-API." },
+  ]);
+  const back = XLSX.read(out, { type: "array" }).Sheets.S;
+  assert.equal(back.D3.v, "Answer");
+  assert.equal(back.D4.v, "Ja, über die Export-API.");
+  assert.equal(back.C4.v, "Snowplow?");
+});
+
+test("exporting into a row that does not exist in the sheet XML creates it in order", async () => {
+  const XLSX = require("xlsx");
+  const { updateOriginalXlsx } = require("../src/lib/xlsxPreserve.ts");
+  const ws = XLSX.utils.aoa_to_sheet([["Frage"], ["Q?"]], { origin: "B3" });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "S");
+  const bytes = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+  const out = await updateOriginalXlsx(bytes, "S", [{ row: 0, column: 0, value: "Top" }, { row: 9, column: 1, value: "Bottom" }]);
+  const back = XLSX.read(out, { type: "array" }).Sheets.S;
+  assert.equal(back.A1.v, "Top");
+  assert.equal(back.B10.v, "Bottom");
+  assert.equal(back.B4.v, "Q?");
+});
+
+test("writing an empty self-closing cell never deletes the following cells", async () => {
+  const JSZipLocal = require("jszip");
+  const { updateOriginalXlsx } = require("../src/lib/xlsxPreserve.ts");
+  const XLSX = require("xlsx");
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Q", "", "", "Keep"]]), "S");
+  const zip = await JSZipLocal.loadAsync(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+  const sheet = "xl/worksheets/sheet1.xml";
+  let xml = await zip.file(sheet).async("string");
+  // Reproduce Excel's styled empty cells: <c r="B1" s="1"/><c r="C1" s="1"/>
+  xml = xml.replace(/<row r="1"([^>]*)>[\s\S]*?<\/row>/, '<row r="1"$1><c r="A1" t="inlineStr"><is><t>Q</t></is></c><c r="B1" s="0"/><c r="C1" s="0"/><c r="D1" t="inlineStr"><is><t>Keep</t></is></c></row>');
+  zip.file(sheet, xml);
+  const bytes = await zip.generateAsync({ type: "uint8array" });
+  const out = await updateOriginalXlsx(bytes.buffer, "S", [
+    { row: 0, column: 2, value: "Review" },
+    { row: 0, column: 1, value: "Answer" },
+  ]);
+  const back = XLSX.read(out, { type: "array" }).Sheets.S;
+  assert.equal(back.B1.v, "Answer");
+  assert.equal(back.C1.v, "Review");
+  assert.equal(back.D1.v, "Keep");
+});

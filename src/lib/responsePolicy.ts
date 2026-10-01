@@ -1,3 +1,4 @@
+import { EXAMPLE_LEAD, SOURCE_LABEL, isHeadingWord, isNonEnglishNarration } from "./multilingual";
 /**
  * Política global para respuestas que se entregan directamente a clientes en
  * RFPs/RFIs. Mantener aquí las reglas editoriales evita que cada modo o proveedor
@@ -107,7 +108,8 @@ export function extractClientAnswer(text: string): { text: string; incomplete: b
 export function hasNonClientFacingLanguage(text: string): boolean {
   return ASSISTANT_VOICE.test(text.trim()) || ANSWER_ANNOUNCEMENT.test(text.trim()) || ANSWER_PREPARATION.test(text.trim()) || NAMED_SOURCE_COMMENTARY.test(text.trim()) ||
     RESEARCH_STATUS.test(text.trim()) ||
-    NON_CLIENT_FACING_PATTERNS.some((pattern) => pattern.test(text));
+    NON_CLIENT_FACING_PATTERNS.some((pattern) => pattern.test(text)) ||
+    isNonEnglishNarration(text);
 }
 
 /** Fallback factual y client-facing cuando no hay soporte suficiente. */
@@ -191,14 +193,12 @@ export function lacksDirectAnswerOpening(text: string): boolean {
     .find(Boolean);
   if (!firstLine || /^[•*-]\s+/.test(firstLine)) return true;
 
-  const words = firstLine.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
+  const words = firstLine.match(/\p{L}[\p{L}'-]*/gu) ?? [];
   const looksLikeHeading =
     words.length > 0 &&
     words.length <= 5 &&
-    !/[.!?]/.test(firstLine) &&
-    words.every(
-      (word) => /^[A-Z][a-z]/.test(word) || /^[A-Z]{2,}$/.test(word),
-    );
+    !/[.!?:]/.test(firstLine) &&
+    words.every((word) => isHeadingWord(word));
   return looksLikeHeading;
 }
 
@@ -209,11 +209,11 @@ export function loopioFormatIssues(text: string): string[] {
   if (lacksDirectAnswerOpening(text)) issues.push("a direct opening paragraph");
   const sections = lines.filter((line, index) => {
     const words = line.split(/\s+/);
-    return words.length >= 2 && words.length <= 4 &&
-      /^[A-Z][A-Za-z0-9 &/-]+$/.test(line) && /^•\s+\S/.test(lines[index + 1] || "");
+    return words.length >= 2 && words.length <= 5 &&
+      /^\p{Lu}[\p{L}\p{N} &/-]+$/u.test(line) && words.every(isHeadingWord) && /^•\s+\S/.test(lines[index + 1] || "");
   });
   if (!sections.length) issues.push("themed headings with concrete bullets");
-  if (!lines.some((line) => /^(?:for|as an) example[,:\s]/i.test(line))) {
+  if (!lines.some((line) => EXAMPLE_LEAD.test(line))) {
     issues.push("a practical example");
   }
   const words = text.replace(/https?:\/\/\S+/g, "").split(/\s+/).filter(Boolean).length;
@@ -276,6 +276,7 @@ function editorialSentence(text: string): boolean {
   return ASSISTANT_VOICE.test(value) || ANSWER_ANNOUNCEMENT.test(value) || ANSWER_PREPARATION.test(value) || RESEARCH_STATUS.test(value) ||
     DOCUMENTATION_GAP.test(value) || MISSING_SOURCE_EVIDENCE.test(value) || sourceCommentary || NAMED_SOURCE_COMMENTARY.test(value) ||
     INTERNAL_REFERRAL.test(value) || isClarificationRequest(value) || SEARCH_PROCESS.test(value) || NO_RESULTS.test(value) ||
+    isNonEnglishNarration(value) ||
     (/^(?:i|we|based on|the only)\b/i.test(value) && hasNonClientFacingLanguage(value));
 }
 
@@ -413,7 +414,7 @@ export function stripInternalSourceLinks(text: string): string {
 export function extractSourceUrls(text: string): string[] {
   const urls: string[] = [];
   for (const line of (text ?? "").split(/\r?\n/)) {
-    if (!/^\s*(?:[•*-]\s*)?(?:sources?|references?|for more information)\b/i.test(line)) {
+    if (!new RegExp(`^\\s*(?:[•*-]\\s*)?(?:${SOURCE_LABEL}|for more information)(?![\\p{L}])`, "iu").test(line)) {
       continue;
     }
     for (const url of line.match(/https?:\/\/[^\s)\];,]+/g) ?? []) {
@@ -451,7 +452,7 @@ export function separateReviewLimitations(
 /** Reject formatting/citations alone, without judging the factual answer. */
 export function hasSubstantiveAnswer(text: string): boolean {
   return (text ?? "").split(/\r?\n/).some((line) => {
-    if (/^\s*(?:#{1,6}\s|(?:sources?|references?|confidence[\s_-]*review|confidence)\s*:)/i.test(line)) return false;
+    if (new RegExp(`^\\s*(?:#{1,6}\\s|(?:${SOURCE_LABEL}|confidence[\\s_-]*review|confidence)\\s*:)`, "iu").test(line)) return false;
     const body = line
       .replace(/\[[^\]]*\]\(https?:\/\/[^)\s]+\)/g, "")
       .replace(/https?:\/\/\S+/g, "")
@@ -499,10 +500,10 @@ export const OFFICIAL_CLAIM_REFERENCES = {
   sla: "https://www.dynamicyield.com/sla/",
 } as const;
 
-const PRIVACY_REGULATION = /\b(?:GDPR|CCPA|UK GDPR|data processing (?:addendum|agreement)|DPA|sub-?processors?)\b/i;
+const PRIVACY_REGULATION = /\b(?:GDPR|CCPA|UK GDPR|DSGVO|RGPD|data processing (?:addendum|agreement)|DPA|AVV|Auftragsverarbeitung\p{L}*|sub-?processors?|Unterauftragsverarbeiter\p{L}*|subencargados?|sous-traitants? ultérieurs?)\b/iu;
 const SECURITY_CERTIFICATION = /\b(?:ISO\s?\/?\s?(?:IEC\s?)?\d{4,5}|SOC\s?[123]|PCI(?:[\s-]?DSS)?|HIPAA|FedRAMP|TISAX|C5|CSA\s?STAR|penetration test(?:s|ing)?|encryption at rest)\b/i;
 const SERVICE_LEVEL =
-  /\b(?:SLAs?|service[- ]level|uptime|RTO|RPO)\b|\b\d+(?:[.,]\d+)?\s?%\s*(?:availability|uptime)\b|\bavailability (?:target|commitment|guarantee)s?\b/i;
+  /\b(?:SLAs?|service[- ]level|uptime|RTO|RPO)\b|\b\d+(?:[.,]\d+)?\s?%\s*(?:availability|uptime|Verfügbarkeit|disponibilidad|disponibilité)\b|\b(?:availability (?:target|commitment|guarantee)s?|Verfügbarkeitsziel\p{L}*|Service-Level-\p{L}+)/iu;
 
 export interface GroundingCheck {
   sourced: boolean;
@@ -525,7 +526,7 @@ export interface GroundingCheck {
 export function checkGrounding(answer: string, urls: string[]): GroundingCheck {
   const body = (answer ?? "")
     .split(/\r?\n/)
-    .filter((line) => !/^\s*(?:[-•*]\s*)?(?:sources?|references?)\s*:/i.test(line))
+    .filter((line) => !new RegExp(`^\\s*(?:[-•*]\\s*)?${SOURCE_LABEL}\\s*:`, "iu").test(line))
     .join("\n")
     .replace(/https?:\/\/\S+/g, "");
   const unique = Array.from(new Set(urls.filter(Boolean)));

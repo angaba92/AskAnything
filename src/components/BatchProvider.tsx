@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as XLSX from "xlsx";
+import { sheetToMatrix } from "@/lib/sheetMatrix";
 import { MAX_CUSTOM_PROMPT_CHARS } from "@/lib/promptMapping";
 import { BatchRequestError, readBatchAnswer } from "@/lib/batchResponse";
 import { bridgeHealth } from "@/lib/bridgeHealth";
@@ -129,6 +130,13 @@ interface BatchContextValue {
 const QUESTION_KEYS = [
   "question",
   "pregunta",
+  "frage",
+  "fragen",
+  "frage/wunsch",
+  "anforderung",
+  "domanda",
+  "pergunta",
+  "vraag",
   "questions",
   "q",
   "prompt",
@@ -140,6 +148,11 @@ const ANSWER_KEYS = [
   "supplier response",
   "answer",
   "respuesta",
+  "antwort",
+  "réponse",
+  "risposta",
+  "resposta",
+  "antwoord",
   "answers",
   "a",
   "response",
@@ -465,13 +478,7 @@ export default function BatchProvider({ children }: { children: ReactNode }) {
   }
 
   function sheetMatrix(sheetName: string): string[][] {
-    const ws = workbookRef.current?.Sheets[sheetName];
-    if (!ws) return [];
-    return XLSX.utils.sheet_to_json<unknown[]>(ws, {
-      header: 1,
-      defval: "",
-      raw: false,
-    }).map((row) => row.map((cell) => String(cell ?? "")));
+    return sheetToMatrix(workbookRef.current?.Sheets[sheetName]);
   }
 
   function headerScore(row: string[]): number {

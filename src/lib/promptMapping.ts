@@ -112,6 +112,8 @@ export function kaStyleInstruction(mode: AnswerMode): string | null {
  * empresa/industria + la pregunta + la instrucción de estilo del modo.
  */
 /** Toda certificación, porcentaje o SLA debe ir respaldado por una referencia. */
+import { LANGUAGE_INSTRUCTION } from "./multilingual";
+
 export const CLAIM_REFERENCE_INSTRUCTION =
   "REFERENCES FOR VERIFIABLE CLAIMS: every certification or compliance standard (e.g. ISO 27001, SOC 2, PCI DSS, GDPR), percentage, SLA, uptime, availability, or latency figure you state must be backed by a public customer-facing reference. Include the URL of that reference in the final Sources line. Only use URLs returned by your tools.";
 
@@ -166,7 +168,7 @@ export function buildKaUserContent(
   const boundary = opts.mode === "loopio" ? `\n\n${CLIENT_ANSWER_FRAME_INSTRUCTION}` : "";
   const recovery = opts.recovery ? `\n\n${RECOVERY_INSTRUCTION}` : "";
   const build = (claims: boolean, best: boolean) =>
-    `Question:\n${q}${context}${style}\n\n${CLIENT_FACING_RFP_POLICY}` +
+    `Question:\n${q}${context}${style}\n\n${CLIENT_FACING_RFP_POLICY}\n\n${LANGUAGE_INSTRUCTION}` +
     (claims ? `\n\n${CLAIM_REFERENCE_INSTRUCTION}` : "") +
     (best ? `\n\n${BEST_ANSWER_INSTRUCTION}` : "") +
     `${recovery}${confidence}${outputContract}${boundary}`;

@@ -259,6 +259,18 @@ AskAnything never accepts an empty answer as the result of a row:
 When the question and owner context are long, optional guidance is dropped
 first so the prompt stays within KA's 8,000-character limit.
 
+### Multilingual questionnaires
+
+KA is instructed to answer in the language of the question, keeping product
+names, URLs, internal markers and the `Sources:` label in English. Structure
+checks and client-facing filters support English, German, Spanish, French,
+Italian, Portuguese and Dutch: localized example leads ("Zum Beispiel",
+"Por ejemplo", "Par exemple"…), headings with accents/umlauts, localized
+research narration and account-manager referrals, and localized privacy/SLA
+terms (for example DSGVO, Verfügbarkeit). Column detection recognizes headers
+such as "Frage", "Antwort", "Pregunta" or "Respuesta". Source documentation is
+English, so translated answers should be reviewed by a native speaker.
+
 ### KA response format compatibility
 
 The KA service changed its output format: instead of a `## Sources` block it now

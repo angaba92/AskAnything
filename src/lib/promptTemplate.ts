@@ -1,3 +1,4 @@
+import { EXAMPLE_LEAD, MORE_INFO_LEAD, SOURCE_LABEL, isHeadingWord } from "./multilingual";
 /**
  * Plantilla de respuesta estructurada para el agente de DY.
  *
@@ -163,14 +164,14 @@ export function formatLoopioSections(text: string): string {
   let inSection = false;
   return text.split(/\n{2,}/).map((block, index) => {
     const value = block.trim();
-    if (/^(?:(?:for|as an) example\b|for more information\b|sources?:)/i.test(value)) {
+    if (EXAMPLE_LEAD.test(value) || MORE_INFO_LEAD.test(value) || new RegExp(`^${SOURCE_LABEL}:`, "iu").test(value)) {
       inSection = false;
       return value;
     }
     const lines = value.split(/\r?\n/);
     const words = lines[0].split(/\s+/);
-    const heading = index > 0 && words.length >= 2 && words.length <= 4 &&
-      words.every((word) => /^(?:[A-Z][A-Za-z0-9/-]*|and|or|for|of|the|in|to|&)$/.test(word));
+    const heading = index > 0 && words.length >= 2 && words.length <= 5 &&
+      !/[.!?:]/.test(lines[0]) && /^\p{Lu}/u.test(words[0]) && words.every(isHeadingWord);
     if (heading) {
       inSection = true;
       if (lines.length === 1) return value;

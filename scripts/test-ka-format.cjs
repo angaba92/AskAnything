@@ -162,3 +162,49 @@ test("live prod leak (Magnolia): documentation gap and account-rep referral move
   assert.ok(r.reviewRequired);
   assert.match(r.reviewReason, /Magnolia CMS are not available|account representative/);
 });
+
+test("multilingual: German Loopio answer passes structure checks and keeps umlaut headings", () => {
+  const raw = `BEGIN_CLIENT_ANSWER
+Mastercard Dynamic Yield personalisiert Produktlisten bereits während der laufenden Session in Echtzeit.
+
+Echtzeit-Signale und Ranking
+• Klicks, Warenkorb- und Kaufereignisse fließen sofort in das Nutzerprofil ein.
+• Das Ranking der Produktlistenseite wird beim nächsten Seitenaufruf aktualisiert.
+
+Steuerung durch Fachbereiche
+• Merchandising-Regeln können Produkte nach Kategorie, Land und Zeitraum priorisieren.
+• Regeln lassen sich auf Segmente oder Kanäle beschränken.
+
+Zum Beispiel kann ein Modehändler Artikel in der wahrscheinlichen Kundengröße bevorzugt ausspielen.
+
+Quelle: [Experience API Basics](https://dy.dev/docs/experience-api-basics)
+END_CLIENT_ANSWER
+CONFIDENCE_REVIEW: NO | Confident and sufficiently supported`;
+  const r = normalizeBridgedKaResponse(raw, { question: "Wird bereits während einer laufenden Session auf das Kundenverhalten eingegangen?", mode: "loopio", confidenceReview: true });
+  assert.equal(r.reviewRequired, false, r.reviewReason);
+  assert.match(r.answer, /^Mastercard Dynamic Yield personalisiert/);
+  assert.match(r.answer, /Echtzeit-Signale und Ranking\n• Klicks/);
+  assert.match(r.answer, /Sources: https:\/\/dy\.dev\/docs\/experience-api-basics$/);
+  assert.ok(!/Quelle:/.test(r.answer));
+});
+
+test("multilingual: German, Spanish and French research narration never reaches the client answer", () => {
+  const cases = [
+    ["Basierend auf meiner Suche habe ich keine spezifischen Informationen zu Snowplow gefunden.", "Dynamic Yield kann Ereignisdaten über die Export-API an externe Systeme übergeben."],
+    ["Die verfügbaren Quellen enthalten keine Angaben zur Speicherdauer.", "Daten werden in Rechenzentren der EU verarbeitet."],
+    ["Bitte wenden Sie sich an Ihren Account Manager für weitere Details.", "Rollen und Berechtigungen können pro Shop vergeben werden."],
+    ["No he encontrado información específica sobre Magnolia.", "Dynamic Yield sincroniza contenido mediante feeds de datos."],
+    ["Je n'ai pas trouvé d'informations précises sur la latence.", "Dynamic Yield sert les décisions depuis le centre de données de l'UE."],
+  ];
+  for (const [narration, fact] of cases) {
+    const r = normalizeBridgedKaResponse(`${narration}\n\n${fact}`, { question: "Frage?", mode: "simple", confidenceReview: true });
+    assert.ok(!r.answer.includes(narration.slice(0, 20)), `${narration} -> ${r.answer}`);
+    assert.ok(r.answer.includes(fact.slice(0, 20)), r.answer);
+    assert.ok(r.reviewRequired);
+  }
+});
+
+test("multilingual: DSGVO and German SLA wording receive official references", () => {
+  const g = checkGrounding("Die Verarbeitung erfolgt DSGVO-konform mit einem Verfügbarkeitsziel von 99,9 %.", []);
+  assert.deepEqual(g.fallbackReferences, ["https://www.dynamicyield.com/dpa/", "https://www.dynamicyield.com/sla/"]);
+});

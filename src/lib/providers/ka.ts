@@ -24,6 +24,7 @@ import {
   stripNonClientFacingSentences,
 } from "../promptMapping";
 import { resolveMode, plainifyAnswer, enforceBullets, formatLoopioSections } from "../promptTemplate";
+import { SOURCE_LABEL } from "../multilingual";
 import { appendReferences, checkGrounding, extractClientAnswer, hasSubstantiveAnswer, loopioFormatIssues, separateClientFacingResponse } from "../responsePolicy";
 import type { GenerateOpts, ProviderAnswer } from "./types";
 
@@ -57,7 +58,7 @@ export function normalizeBridgedKaResponse(
   const confidence = extractConfidenceReview(rawText);
   const frame = mode === "loopio" ? extractClientAnswer(confidence.text) : { text: confidence.text, incomplete: false };
   const note = extractConfidenceNote(frame.text);
-  const sourceHeading = note.text.search(/^\s*(?:#{1,6}\s*|\*\*)?(?:sources?|references?)\s*(?:\*\*)?\s*:?\s*$/im);
+  const sourceHeading = note.text.search(new RegExp(`^\\s*(?:#{1,6}\\s*|\\*\\*)?${SOURCE_LABEL}\\s*(?:\\*\\*)?\\s*:?\\s*$`, "imu"));
   const body = !isCustomMode && sourceHeading >= 0
     ? note.text.slice(0, sourceHeading)
     : note.text;
