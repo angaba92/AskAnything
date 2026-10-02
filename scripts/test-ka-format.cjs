@@ -208,3 +208,65 @@ test("multilingual: DSGVO and German SLA wording receive official references", (
   const g = checkGrounding("Die Verarbeitung erfolgt DSGVO-konform mit einem Verfügbarkeitsziel von 99,9 %.", []);
   assert.deepEqual(g.fallbackReferences, ["https://www.dynamicyield.com/dpa/", "https://www.dynamicyield.com/sla/"]);
 });
+
+test("language detection drives a mandatory output-language rule at the end of the prompt", () => {
+  const { detectQuestionLanguage } = require("../src/lib/multilingual.ts");
+  const { buildKaUserContent } = require("../src/lib/promptMapping.ts");
+  assert.equal(detectQuestionLanguage("Werden Kunden- und Session-IDs pseudonymisiert verarbeitet?"), "German");
+  assert.equal(detectQuestionLanguage("Pilot: variable Kosten"), "German");
+  assert.equal(detectQuestionLanguage("¿Cómo funciona la personalización?"), "Spanish");
+  assert.equal(detectQuestionLanguage("Comment gérez-vous les données?"), "French");
+  assert.equal(detectQuestionLanguage("Does DY support A/B tests in the EU?"), null);
+  const de = buildKaUserContent("Werden Kunden- und Session-IDs pseudonymisiert verarbeitet?", { mode: "loopio", confidenceReview: true, recovery: true });
+  assert.ok(de.length <= 8000);
+  assert.match(de, /MANDATORY OUTPUT LANGUAGE: the question is in German[\s\S]*$/);
+  assert.doesNotMatch(buildKaUserContent("What is the SDK footprint?", { mode: "loopio", confidenceReview: true }), /MANDATORY OUTPUT LANGUAGE/);
+});
+
+test("German question answered in English is flagged; meta-answers about the question are not accepted", () => {
+  const english = "Mastercard Dynamic Yield pseudonymizes customer identifiers and session identifiers. The platform stores the data in the EU and the customer can control which data is collected for the personalization and the reporting of the experiences.";
+  const r = normalizeBridgedKaResponse(english, { question: "Werden Kunden- und Session-IDs pseudonymisiert verarbeitet?", mode: "simple", confidenceReview: true });
+  assert.ok(r.reviewRequired);
+  assert.match(r.reviewReason, /question is in German but the answer is in English/);
+  const meta = normalizeBridgedKaResponse("\"Pilot: Fixkosten für die Integration\" translates to \"Pilot: Fixed costs for integration.\" This appears to be a German RFP question about fixed costs.\n\nOnce you clarify, I'll search our knowledge base and provide a complete answer.", { question: "Pilot: Fixkosten für die Integration", mode: "simple", confidenceReview: true });
+  assert.ok(!/translates to|Once you clarify/.test(meta.answer), meta.answer);
+});
+
+test("German Loopio example forms are recognised (Praktisches Beispiel, • Beispiel:)", () => {
+  const { loopioFormatIssues } = require("../src/lib/responsePolicy.ts");
+  const base = "Mastercard Dynamic Yield personalisiert Kategorieseiten in Echtzeit.\n\nRanking und Personalisierung\n• Produkte werden nach Affinität sortiert.\n\n";
+  for (const example of ["Praktisches Beispiel\n\nEin Händler sortiert Sportartikel nach Affinität.", "• Beispiel: Ein Händler sortiert Sportartikel nach Affinität.", "Beispiel: Ein Händler sortiert Sportartikel."]) {
+    assert.ok(!loopioFormatIssues(base + example).includes("a practical example"), example);
+  }
+});
+
+test("clarification instead of an answer triggers recovery first, but is kept on the recovery attempt", () => {
+  const raw = "The phrase \"Alles aufgeteilt nach Pilot und Vollversion\" translates to \"Everything divided by pilot and full version.\"\n\nCould you provide the complete RFP question or context?";
+  const first = normalizeBridgedKaResponse(raw, { question: "Alles aufgeteilt nach Pilot und Vollversion", mode: "loopio", confidenceReview: true });
+  assert.equal(first.answer, "");
+  assert.match(first.reviewReason, /asked for clarification/);
+  const second = normalizeBridgedKaResponse(`Mastercard Dynamic Yield bietet Pilot- und Vollversionen an.\n\n${raw}`, { question: "Alles aufgeteilt nach Pilot und Vollversion", mode: "simple", confidenceReview: true, recovery: true });
+  assert.match(second.answer, /Pilot- und Vollversionen/);
+});
+
+test("internal commercial terms are flagged for Sales review", () => {
+  const g = checkGrounding("Die Onboarding-Gebühr beträgt 25.000 USD oder 10 % des Lizenzvertrags; mit Genehmigung des VP sind 15.000 USD möglich.", ["https://dy.dev/x"]);
+  assert.ok(g.reviewReasons.some((r) => /commercial terms/.test(r)));
+  assert.ok(!checkGrounding("Sale-affine Kund:innen erhalten Rabatt-Kampagnen.", ["https://dy.dev/x"]).reviewReasons.length);
+});
+
+test("recovery attempt never sends clarification questions to the customer", () => {
+  const raw = "For example:\n\n• Is this a section header under which specific questions follow?\n\nOnce you share the complete question, I will provide a comprehensive answer.";
+  const r = normalizeBridgedKaResponse(raw, { question: "Alles aufgeteilt nach Pilot und Vollversion", mode: "loopio", confidenceReview: true, recovery: true });
+  assert.ok(!/\?|Once you share/.test(r.answer), r.answer);
+  assert.match(r.reviewReason, /asked for clarification twice/);
+  const mixed = normalizeBridgedKaResponse(`Mastercard Dynamic Yield bietet Pilot- und Vollversionen an.\n\nOnce you share the complete question, I will provide more detail.`, { question: "Pilot?", mode: "simple", confidenceReview: true, recovery: true });
+  assert.equal(mixed.answer.trim(), "Mastercard Dynamic Yield bietet Pilot- und Vollversionen an.");
+});
+
+test("recovery strips a clarification sentence ending in 'For example:' and its option list", () => {
+  const raw = "Could you please provide the specific RFP or RFI question you would like me to answer? For example:\n\n• A question about Dynamic Yield's capabilities\n• A yes/no question about supported features\n\nOnce you share the actual question, I will provide a complete answer.";
+  const r = normalizeBridgedKaResponse(raw, { question: "Bitte die Technische Doku mit schicken", mode: "loopio", confidenceReview: true, recovery: true });
+  assert.equal(r.answer, "");
+  assert.match(r.reviewReason, /asked for clarification twice/);
+});

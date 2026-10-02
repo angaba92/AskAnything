@@ -112,7 +112,7 @@ export function kaStyleInstruction(mode: AnswerMode): string | null {
  * empresa/industria + la pregunta + la instrucción de estilo del modo.
  */
 /** Toda certificación, porcentaje o SLA debe ir respaldado por una referencia. */
-import { LANGUAGE_INSTRUCTION } from "./multilingual";
+import { LANGUAGE_INSTRUCTION, answerLanguageInstruction, detectQuestionLanguage } from "./multilingual";
 
 export const CLAIM_REFERENCE_INSTRUCTION =
   "REFERENCES FOR VERIFIABLE CLAIMS: every certification or compliance standard (e.g. ISO 27001, SOC 2, PCI DSS, GDPR), percentage, SLA, uptime, availability, or latency figure you state must be backed by a public customer-facing reference. Include the URL of that reference in the final Sources line. Only use URLs returned by your tools.";
@@ -123,7 +123,7 @@ export const BEST_ANSWER_INSTRUCTION =
 
 /** Segundo intento cuando el primero no produjo una respuesta utilizable. */
 export const RECOVERY_INSTRUCTION =
-  "RECOVERY: the previous attempt returned no usable answer. Now return a complete substantive answer from the closest supported DY capabilities (APIs, SDKs, feeds, architecture, settings, best practices). Do not say information is missing inside the answer.";
+  "RECOVERY: the previous attempt returned no usable answer. Never ask questions; assume the most likely RFP intent. If the row is a request or note (e.g. 'please send the technical documentation'), respond to it directly, e.g. with the relevant public DY documentation. Give a complete answer from the closest supported DY capabilities.";
 
 export function buildKaUserContent(
   question: string,
@@ -167,17 +167,21 @@ export function buildKaUserContent(
     : "";
   const boundary = opts.mode === "loopio" ? `\n\n${CLIENT_ANSWER_FRAME_INSTRUCTION}` : "";
   const recovery = opts.recovery ? `\n\n${RECOVERY_INSTRUCTION}` : "";
-  const build = (claims: boolean, best: boolean) =>
-    `Question:\n${q}${context}${style}\n\n${CLIENT_FACING_RFP_POLICY}\n\n${LANGUAGE_INSTRUCTION}` +
+  const detected = answerLanguageInstruction(detectQuestionLanguage(q));
+  const languageRule = detected ? `\n\n${detected}` : "";
+  const build = (claims: boolean, best: boolean, generic = !detected) =>
+    `Question:\n${q}${context}${style}\n\n${CLIENT_FACING_RFP_POLICY}` +
+    (generic ? `\n\n${LANGUAGE_INSTRUCTION}` : "") +
     (claims ? `\n\n${CLAIM_REFERENCE_INSTRUCTION}` : "") +
     (best ? `\n\n${BEST_ANSWER_INSTRUCTION}` : "") +
-    `${recovery}${confidence}${outputContract}${boundary}`;
+    `${recovery}${confidence}${outputContract}${boundary}${languageRule}`;
   // KA admite 8000 caracteres. Las guías opcionales ceden espacio a la pregunta
   // y al contexto: primero la de referencias (el servidor añade las oficiales
   // igualmente) y después la de "responder siempre" (la recuperación la cubre).
   let content = build(true, true);
   if (content.length > 8000) content = build(false, true);
   if (content.length > 8000) content = build(false, false);
+  if (content.length > 8000) content = build(false, false, false);
   if (content.length > 8000) {
     throw new Error(`The full Knowledge Assistant prompt is ${content.length} characters; its limit is 8000. Shorten the question or supporting context before retrying.`);
   }

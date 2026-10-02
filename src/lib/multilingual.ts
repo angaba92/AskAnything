@@ -10,7 +10,7 @@ export const LANGUAGE_INSTRUCTION =
 
 /** Frase que introduce el ejemplo práctico. */
 export const EXAMPLE_LEAD =
-  /^(?:(?:for|as an) example|zum beispiel|beispielsweise|ein beispiel|als beispiel|por ejemplo|como ejemplo|a modo de ejemplo|par exemple|à titre d['’]exemple|ad esempio|per esempio|por exemplo|como exemplo|bijvoorbeeld)(?=[\s,:])/iu;
+  /^(?:•\s*)?(?:(?:for|as an) example|(?:a )?practical example|example\s*:|zum beispiel|beispielsweise|ein beispiel|als beispiel|(?:praktisches |konkretes )?beispiel\b|für beispielsweise|por ejemplo|como ejemplo|a modo de ejemplo|(?:ejemplo )?práctico|ejemplo\s*:|par exemple|à titre d['’]exemple|exemple (?:pratique|concret)|exemple\s*:|ad esempio|per esempio|esempio(?: pratico)?\s*:?|por exemplo|como exemplo|exemplo(?: prático)?\s*:?|bijvoorbeeld|(?:praktisch )?voorbeeld\s*:?)(?=[\s,:]|$)/iu;
 
 /** Frase que introduce las referencias para más información. */
 export const MORE_INFO_LEAD =
@@ -69,4 +69,46 @@ export const NON_ENGLISH_NARRATION: RegExp[] = [
 
 export function isNonEnglishNarration(text: string): boolean {
   return NON_ENGLISH_NARRATION.some((pattern) => pattern.test(text ?? ""));
+}
+
+const LANGUAGE_MARKERS: Array<[string, RegExp]> = [
+  ["German", /\b(?:und|der|die|das|nicht|wird|werden|können|kann|ist|sind|mit|für|über|bei|auch|einer?|unsere?|eure?|welche|wie|gibt|es)\b|[äöüß]/giu],
+  ["Spanish", /\b(?:el|la|los|las|que|para|con|una?|es|son|cómo|qué|puede|pueden|nuestro|nuestra|del|se)\b|[ñ¿¡]/giu],
+  ["French", /\b(?:le|la|les|des|est|sont|pour|avec|une?|que|quels?|quelles?|comment|pouvez|nous|vous|du|au)\b|[çœ]/giu],
+  ["Italian", /\b(?:il|lo|gli|che|per|con|una?|sono|come|quali|può|possono|nostro|nostra|della|degli)\b/giu],
+  ["Portuguese", /\b(?:o|os|as|que|para|com|uma?|são|como|quais|pode|podem|nosso|nossa|não|dos|das)\b|[ãõ]/giu],
+  ["Dutch", /\b(?:de|het|een|en|niet|wordt|worden|kan|kunnen|zijn|met|voor|onze|hoe|welke|ook)\b|ij\b/giu],
+];
+const ENGLISH_MARKERS = /\b(?:the|and|is|are|can|does|do|what|which|how|with|for|our|your|of|to|in)\b/giu;
+
+/** Idioma probable de la pregunta (null = inglés o indeterminado). */
+export function detectQuestionLanguage(text: string): string | null {
+  const value = (text ?? "").toLowerCase();
+  const english = value.match(ENGLISH_MARKERS)?.length ?? 0;
+  let best: [string, number] | null = null;
+  for (const [language, pattern] of LANGUAGE_MARKERS) {
+    const score = value.match(pattern)?.length ?? 0;
+    if (!best || score > best[1]) best = [language, score];
+  }
+  if (!best || best[1] === 0) {
+    // Fragmentos cortos ("Pilot: variable Kosten"): sustantivos compuestos alemanes.
+    return /(?:^|[\s:/(])(?:\p{L}*(?:kosten|laufzeit|vertrag|kontingent|anforderung\p{L}*|anbindung|einwilligung|datenschutz|bedienung|vollversion))(?=$|[\s/:,.?)])/iu.test(text ?? "") ? "German" : null;
+  }
+  return best[1] > english ? best[0] : null;
+}
+
+/** Instrucción obligatoria de idioma, colocada al final del prompt (recencia). */
+export function answerLanguageInstruction(language: string | null): string {
+  if (!language) return "";
+  return `MANDATORY OUTPUT LANGUAGE: the question is in ${language}. Write the ENTIRE client-facing answer (opening, headings, bullets, example) in ${language}. Do not answer in English. Only BEGIN_CLIENT_ANSWER, END_CLIENT_ANSWER, CONFIDENCE_REVIEW and the "Sources:" label stay in English.`;
+}
+
+/** Cuenta aproximada de marcadores ingleses vs. del idioma esperado. */
+export function looksEnglish(text: string, language: string): boolean {
+  const body = (text ?? "").replace(/https?:\/\/\S+/g, "").toLowerCase();
+  const pattern = LANGUAGE_MARKERS.find(([name]) => name === language)?.[1];
+  if (!pattern) return false;
+  const english = body.match(ENGLISH_MARKERS)?.length ?? 0;
+  const expected = body.match(pattern)?.length ?? 0;
+  return english >= 8 && english > expected * 2;
 }

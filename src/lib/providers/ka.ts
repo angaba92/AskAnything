@@ -24,8 +24,8 @@ import {
   stripNonClientFacingSentences,
 } from "../promptMapping";
 import { resolveMode, plainifyAnswer, enforceBullets, formatLoopioSections } from "../promptTemplate";
-import { SOURCE_LABEL } from "../multilingual";
-import { appendReferences, checkGrounding, extractClientAnswer, hasSubstantiveAnswer, loopioFormatIssues, separateClientFacingResponse } from "../responsePolicy";
+import { SOURCE_LABEL, detectQuestionLanguage, looksEnglish } from "../multilingual";
+import { appendReferences, checkGrounding, stripClarification, extractClientAnswer, hasSubstantiveAnswer, loopioFormatIssues, separateClientFacingResponse } from "../responsePolicy";
 import type { GenerateOpts, ProviderAnswer } from "./types";
 
 export function normalizeBridgedKaResponse(
@@ -62,7 +62,23 @@ export function normalizeBridgedKaResponse(
   const body = !isCustomMode && sourceHeading >= 0
     ? note.text.slice(0, sourceHeading)
     : note.text;
-  const separated = separateClientFacingResponse(isCustomMode ? body : plainifyAnswer(body));
+  // Una pregunta de aclaración no es una respuesta. En el primer intento se
+  // devuelve vacía (422) para que el Batch lance el intento de recuperación;
+  // en la recuperación se conserva lo que haya, para no dejar nunca la fila vacía.
+  if (!isCustomMode && !opts.recovery && isClarificationRequest(body)) {
+    return {
+      answer: "",
+      sources: [],
+      sourcesText: "",
+      expert: "knowledge_assistant",
+      threadId: "",
+      reviewRequired: true,
+      reviewReason: "The Knowledge Assistant asked for clarification instead of answering; retrying with the most likely interpretation.",
+    };
+  }
+  const clarificationLeftover = !isCustomMode && opts.recovery && isClarificationRequest(body);
+  const answerBody = clarificationLeftover ? stripClarification(body) : body;
+  const separated = separateClientFacingResponse(isCustomMode ? answerBody : plainifyAnswer(answerBody));
   let answer = stripInternalSourceLinks(separated.answer);
   const normalizedConfidence =
     opts.confidenceReview
@@ -102,7 +118,17 @@ export function normalizeBridgedKaResponse(
     noteNeedsReview ? note.note : "",
     ...separated.limitations,
     ...separateReviewLimitations(separated.answer).limitations,
-    isClarificationRequest(body) ? "The response asks for clarification; review the interpretation." : "",
+    isClarificationRequest(body)
+      ? clarificationLeftover
+        ? "The Knowledge Assistant asked for clarification twice; the row may be a heading or instruction rather than a question. Clarification text was removed from the answer."
+        : "The response asks for clarification; review the interpretation."
+      : "",
+    (() => {
+      const language = detectQuestionLanguage(opts.question);
+      return language && looksEnglish(answer, language)
+        ? `The question is in ${language} but the answer is in English; translate before submitting.`
+        : "";
+    })(),
     formatIssues.length ? `Incomplete Loopio format: missing ${formatIssues.join("; ")}. The available answer is preserved, not padded with invented content.` : "",
     frame.incomplete ? "The client-answer boundary was incomplete; review for a truncated response." : "",
     ...grounding.reviewReasons,

@@ -178,6 +178,19 @@ const CLARIFICATION_PATTERNS: RegExp[] = [
   /\bplease provide (?:the|a) specific (?:rfp |rfi )?(?:question|prompt)\b/i,
   /\bwhat is the (?:specific )?question\??/i,
   /\b(?:i am|i['’]m|we are|we['’]re) ready to help\b/i,
+  // Meta-answers about the question itself instead of answering it.
+  /\btranslates to\s*["“]/i,
+  /\b(?:could|can|would) you (?:please )?provide (?:the complete|more context|more details|additional context|the full)\b/i,
+  /\bis this question asking (?:about|whether|for)\b/i,
+  /\bare you asking (?:about|whether|if|for)\b/i,
+  /\b(?:this|the) question (?:appears|seems) to (?:address|ask|be about|refer to|concern)\b/i,
+  /\bthis appears to be an? (?:\w+ )?(?:rfp|rfi|question|request)\b/i,
+  /\bonce you (?:clarify|confirm|provide|share|send)\b/i,
+  /\bI need to clarify\b/i,
+  /\bplease share (?:the|your) (?:exact|specific|actual)\b/i,
+  /\b(?:i|we)(?:['’]ll| will) draft\b/i,
+  /\bif you(?:['’]re| are) looking for\b[^.!?\n]*\b(?:i|we) can point you\b/i,
+  /\b(?:i|we)['’]ll search (?:our|the) knowledge base\b/i,
 ];
 
 /** Identifica respuestas que devuelven preguntas al usuario, inválidas en bulk. */
@@ -505,6 +518,10 @@ const SECURITY_CERTIFICATION = /\b(?:ISO\s?\/?\s?(?:IEC\s?)?\d{4,5}|SOC\s?[123]|
 const SERVICE_LEVEL =
   /\b(?:SLAs?|service[- ]level|uptime|RTO|RPO)\b|\b\d+(?:[.,]\d+)?\s?%\s*(?:availability|uptime|Verfügbarkeit|disponibilidad|disponibilité)\b|\b(?:availability (?:target|commitment|guarantee)s?|Verfügbarkeitsziel\p{L}*|Service-Level-\p{L}+)/iu;
 
+/** Precios, tasas o niveles de aprobación internos: nunca deben salir sin validar. */
+const COMMERCIAL_TERMS =
+  /\b\d{1,3}(?:[.,\s]\d{3})+(?:[.,]\d+)?\s?(?:USD|EUR|GBP|CHF|US\$|€|\$|£)|(?:USD|EUR|GBP|CHF|€|\$|£)\s?\d{1,3}(?:[.,\s]?\d{3})+|\b(?:VP|vice president|deal desk)\b[^.\n]{0,40}\b(?:approval|approve[sd]?|genehmigung|aprobación|approbation)|\b(?:genehmigung|approval) (?:des|by the|from the|del) (?:VP|vice president)\b/iu;
+
 export interface GroundingCheck {
   sourced: boolean;
   officialUrls: string[];
@@ -551,6 +568,11 @@ export function checkGrounding(answer: string, urls: string[]): GroundingCheck {
   if (SERVICE_LEVEL.test(body) && !has(OFFICIAL_CLAIM_REFERENCES.sla)) {
     fallbackReferences.push(OFFICIAL_CLAIM_REFERENCES.sla);
   }
+  if (COMMERCIAL_TERMS.test(body)) {
+    reviewReasons.push(
+      "Contains commercial terms (prices, fees, internal approval levels). These may come from internal sources: confirm with Sales/Deal Desk before sharing with the customer.",
+    );
+  }
   if (unofficialUrls.length) {
     reviewReasons.push(
       `Cited source outside official Dynamic Yield documentation: ${unofficialUrls.join(", ")}. Confirm it is authoritative and customer-shareable.`,
@@ -571,4 +593,32 @@ export function appendReferences(answer: string, refs: string[]): string {
     return lines.join("\n");
   }
   return `${lines.join("\n")}\n\nSources: ${refs.join("; ")}`;
+}
+
+/**
+ * Elimina de una respuesta las partes que solo piden aclaración (frases de
+ * aclaración, preguntas sueltas y su "For example:" introductorio). Se usa en el
+ * intento de recuperación: nunca se envían preguntas al cliente.
+ */
+export function stripClarification(text: string): string {
+  const out: string[] = [];
+  let dropOptions = false;
+  for (const raw of (text ?? "").split(/\r?\n/)) {
+    const isBullet = /^\s*(?:[•*-]|\d+[.)])\s+/.test(raw);
+    if (!raw.trim()) { out.push(""); continue; }
+    // Options listed after a clarification ("For example:\n- A question about…").
+    if (dropOptions && isBullet) continue;
+    dropOptions = false;
+    const sentences = raw.split(/(?<=[.!?:])\s+/);
+    const kept = sentences.filter((sentence) => {
+      const value = sentence.replace(/^[\s•*-]+/, "").trim();
+      if (!value) return false;
+      if (/\?\s*$/.test(value)) return false;
+      if (/^(?:for example|e\.g\.|zum beispiel|por ejemplo|par exemple)\s*:\s*$/i.test(value)) return false;
+      return !isClarificationRequest(value);
+    });
+    if (kept.length < sentences.length && /[:?]\s*$/.test(raw.trim())) dropOptions = true;
+    if (kept.length) out.push(kept.join(" "));
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }

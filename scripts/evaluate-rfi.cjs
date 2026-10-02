@@ -113,7 +113,9 @@ function curlJson(url, body, timeout) {
       entry.kaStatus = ka.status;
       entry.raw = ka.text;
       if (ka.status !== 200) throw new Error(`KA HTTP ${ka.status}`);
-      const app = askApp({ question, mode, backend: "ka", confidenceReview: true, localKaResponse: ka.text });
+      const replayRecovery = cached[r + 1]?.attempts === 2;
+      entry.attempts = replayRecovery ? 2 : 1;
+      const app = askApp({ question, mode, backend: "ka", confidenceReview: true, localKaResponse: ka.text, recovery: replayRecovery });
       const data = JSON.parse(app.text);
       entry.appStatus = app.status;
       entry.answer = data.answer ?? "";
